@@ -1,0 +1,19 @@
+[package]
+name = "devicemem_cuda"
+version = "0.1.0"
+authors = ["Peter Jin <peterhaijin@gmail.com>"]
+build = "build.rs"
+
+[lib]
+name = "devicemem_cuda"
+path = "src/lib.rs"
+
+[build-dependencies]
+gcc = "*"
+
+[dependencies]
+libc = "*"
+cuda = { path = "../libcuda" }
+cuda_blas = { path = "../libcuda_blas" }
+cuda_dnn = { path = "../libcuda_dnn" }
+densearray = { path = "../libdensearray" }
