@@ -645,6 +645,105 @@ impl<'a> DeviceArray2dViewMut<'a, f32> {
   }
 }*/
 
+pub struct DeviceArray4d<T> where T: Copy {
+  buf:      DeviceMem<T>,
+  dim:      (usize, usize, usize, usize),
+  stride:   (usize, usize, usize, usize),
+}
+
+impl DeviceArray4d<f32> {
+  pub fn zeros(dim: (usize, usize, usize, usize), conn: DeviceConn) -> DeviceArray4d<f32> {
+    let len = dim.flat_len();
+    let mut buf = unsafe { DeviceMem::alloc(len, conn.clone()) };
+    unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.stream) }.unwrap();
+    DeviceArray4d{
+      buf:      buf,
+      dim:      dim,
+      stride:   dim.least_stride(),
+    }
+  }
+}
+
+impl<T> DeviceArray4d<T> where T: Copy {
+  pub fn dim(&self) -> (usize, usize, usize, usize) {
+    self.dim
+  }
+
+  pub fn stride(&self) -> (usize, usize, usize, usize) {
+    self.stride
+  }
+}
+
+impl<'a, T> AsView<'a, DeviceArray4dView<'a, T>> for DeviceArray4d<T> where T: Copy {
+  fn as_view(&'a self) -> DeviceArray4dView<'a, T> {
+    DeviceArray4dView{
+      buf:      self.buf.as_ref(),
+      dim:      self.dim,
+      stride:   self.stride,
+    }
+  }
+}
+
+impl<'a, T> AsViewMut<'a, DeviceArray4dViewMut<'a, T>> for DeviceArray4d<T> where T: Copy {
+  fn as_view_mut(&'a mut self) -> DeviceArray4dViewMut<'a, T> {
+    DeviceArray4dViewMut{
+      buf:      self.buf.as_mut(),
+      dim:      self.dim,
+      stride:   self.stride,
+    }
+  }
+}
+
+pub struct DeviceArray4dView<'a, T> where T: 'a + Copy {
+  buf:      DeviceMemRef<'a, T>,
+  dim:      (usize, usize, usize, usize),
+  stride:   (usize, usize, usize, usize),
+}
+
+impl<'a, T> DeviceArray4dView<'a, T> where T: 'a + Copy {
+  pub fn dim(&self) -> (usize, usize, usize, usize) {
+    self.dim
+  }
+
+  pub fn stride(&self) -> (usize, usize, usize, usize) {
+    self.stride
+  }
+
+  pub fn as_ptr(&self) -> *const T {
+    self.buf.as_ptr()
+  }
+}
+
+pub struct DeviceArray4dViewMut<'a, T> where T: 'a + Copy {
+  buf:      DeviceMemRefMut<'a, T>,
+  dim:      (usize, usize, usize, usize),
+  stride:   (usize, usize, usize, usize),
+}
+
+impl<'a, T> DeviceArray4dViewMut<'a, T> where T: 'a + Copy {
+  pub fn dim(&self) -> (usize, usize, usize, usize) {
+    self.dim
+  }
+
+  pub fn stride(&self) -> (usize, usize, usize, usize) {
+    self.stride
+  }
+
+  pub fn as_mut_ptr(&self) -> *mut T {
+    self.buf.as_mut_ptr()
+  }
+}
+
+impl<'a> DeviceArray4dViewMut<'a, f32> {
+  pub fn set_constant(&'a mut self, c: f32, conn: DeviceConn) {
+    if self.stride == self.dim.least_stride() {
+      unsafe { devicemem_cuda_vector_set_scalar_f32(self.buf.as_mut_ptr(), self.dim.flat_len(), c, conn.stream.ptr) };
+    } else {
+      unimplemented!();
+    }
+  }
+}
+
 /*
 pub struct Array3d<T, S=Vec<T>> where T: Copy, S: Deref<Target=[T]> {
   buf:      S,

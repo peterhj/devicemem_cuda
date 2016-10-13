@@ -9,7 +9,6 @@ fn main() {
     .flag("-arch=sm_52")
     .flag("-Xcompiler")
     .flag("\'-fPIC\'")
-    .include("src/cu")
     .include("/usr/local/cuda/include")
     .file("kernels/vector_kernels.cu")
     .compile("libdevicemem_cuda_kernels.a");
