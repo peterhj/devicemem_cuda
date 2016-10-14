@@ -13,7 +13,7 @@ use kernels::*;
 
 use cuda::runtime::*;
 use cuda_blas::*;
-use densearray::{ArrayIndex, AsView, AsViewMut, Reshape, ReshapeMut};
+use densearray::prelude::*;
 
 use std::cell::{RefCell};
 use std::marker::{PhantomData};
@@ -25,170 +25,7 @@ use std::sync::{Arc, Mutex};
 
 pub mod kernels;
 pub mod linalg;
-
-/*impl<'a, T> Reshape<'a, usize, Array1dView<'a, T>> for [T] where T: Copy {
-  fn reshape(&'a self, dim: usize) -> Array1dView<'a, T> {
-    // Assume unit stride.
-    assert!(self.len() >= dim);
-    Array1dView{
-      buf:      self,
-      dim:      dim,
-      stride:   dim.least_stride(),
-    }
-  }
-}
-
-impl<'a, T> ReshapeMut<'a, usize, Array1dViewMut<'a, T>> for [T] where T: Copy {
-  fn reshape_mut(&'a mut self, dim: usize) -> Array1dViewMut<'a, T> {
-    // Assume unit stride.
-    assert!(self.len() >= dim);
-    Array1dViewMut{
-      buf:      self,
-      dim:      dim,
-      stride:   dim.least_stride(),
-    }
-  }
-}
-
-impl<'a, T> Reshape<'a, (usize, usize), Array2dView<'a, T>> for [T] where T: Copy {
-  fn reshape(&'a self, dim: (usize, usize)) -> Array2dView<'a, T> {
-    // Assume unit stride.
-    assert!(self.len() >= dim.flat_len());
-    Array2dView{
-      buf:      self,
-      dim:      dim,
-      stride:   dim.least_stride(),
-    }
-  }
-}
-
-impl<'a, T> ReshapeMut<'a, (usize, usize), Array2dViewMut<'a, T>> for [T] where T: Copy {
-  fn reshape_mut(&'a mut self, dim: (usize, usize)) -> Array2dViewMut<'a, T> {
-    // Assume unit stride.
-    assert!(self.len() >= dim.flat_len());
-    Array2dViewMut{
-      buf:      self,
-      dim:      dim,
-      stride:   dim.least_stride(),
-    }
-  }
-}
-
-impl<'a, T> Reshape<'a, (usize, usize), Array2dView<'a, T>> for Array1dView<'a, T> where T: Copy {
-  fn reshape(&'a self, dim: (usize, usize)) -> Array2dView<'a, T> {
-    assert!(dim == (self.dim, 1) || dim == (1, self.dim));
-    if dim.1 == 1 {
-      Array2dView{
-        buf:      self.buf,
-        dim:      dim,
-        stride:   (self.stride, self.stride * self.dim),
-      }
-    } else if dim.0 == 1 {
-      Array2dView{
-        buf:      self.buf,
-        dim:      dim,
-        stride:   (1, self.stride),
-      }
-    } else {
-      unreachable!();
-    }
-  }
-}
-
-impl<'a, T> ReshapeMut<'a, (usize, usize), Array2dViewMut<'a, T>> for Array1dViewMut<'a, T> where T: Copy {
-  fn reshape_mut(&'a mut self, dim: (usize, usize)) -> Array2dViewMut<'a, T> {
-    assert!(dim == (self.dim, 1) || dim == (1, self.dim));
-    if dim.1 == 1 {
-      Array2dViewMut{
-        buf:      self.buf,
-        dim:      dim,
-        stride:   (self.stride, self.stride * self.dim),
-      }
-    } else if dim.0 == 1 {
-      Array2dViewMut{
-        buf:      self.buf,
-        dim:      dim,
-        stride:   (1, self.stride),
-      }
-    } else {
-      unreachable!();
-    }
-  }
-}
-
-impl<'a, T> Reshape<'a, usize, Array1dView<'a, T>> for Array2dView<'a, T> where T: Copy {
-  fn reshape(&'a self, dim: usize) -> Array1dView<'a, T> {
-    assert_eq!(self.dim.least_stride(), self.stride);
-    assert_eq!(self.dim.flat_len(), dim);
-    Array1dView{
-      buf:      self.buf,
-      dim:      dim,
-      stride:   1,
-    }
-  }
-}
-
-impl<'a, T> ReshapeMut<'a, usize, Array1dViewMut<'a, T>> for Array2dViewMut<'a, T> where T: Copy {
-  fn reshape_mut(&'a mut self, dim: usize) -> Array1dViewMut<'a, T> {
-    assert_eq!(self.dim.least_stride(), self.stride);
-    assert_eq!(self.dim.flat_len(), dim);
-    Array1dViewMut{
-      buf:      self.buf,
-      dim:      dim,
-      stride:   1,
-    }
-  }
-}
-
-impl<'a, T> Reshape<'a, usize, Array1dView<'a, T>> for Array4dView<'a, T> where T: Copy {
-  fn reshape(&'a self, dim: usize) -> Array1dView<'a, T> {
-    assert_eq!(self.dim.least_stride(), self.stride);
-    assert_eq!(self.dim.flat_len(), dim);
-    Array1dView{
-      buf:      self.buf,
-      dim:      dim,
-      stride:   1,
-    }
-  }
-}
-
-impl<'a, T> ReshapeMut<'a, usize, Array1dViewMut<'a, T>> for Array4dViewMut<'a, T> where T: Copy {
-  fn reshape_mut(&'a mut self, dim: usize) -> Array1dViewMut<'a, T> {
-    assert_eq!(self.dim.least_stride(), self.stride);
-    assert_eq!(self.dim.flat_len(), dim);
-    Array1dViewMut{
-      buf:      self.buf,
-      dim:      dim,
-      stride:   1,
-    }
-  }
-}
-
-impl<'a, T> Reshape<'a, (usize, usize), Array2dView<'a, T>> for Array4dView<'a, T> where T: Copy {
-  fn reshape(&'a self, dim: (usize, usize)) -> Array2dView<'a, T> {
-    // FIXME(20161008): should do a stricter check, but this is barely sufficient.
-    assert_eq!(self.dim.least_stride(), self.stride);
-    assert_eq!(self.dim.flat_len(), dim.flat_len());
-    Array2dView{
-      buf:      self.buf,
-      dim:      dim,
-      stride:   dim.least_stride(),
-    }
-  }
-}
-
-impl<'a, T> ReshapeMut<'a, (usize, usize), Array2dViewMut<'a, T>> for Array4dViewMut<'a, T> where T: Copy {
-  fn reshape_mut(&'a mut self, dim: (usize, usize)) -> Array2dViewMut<'a, T> {
-    // FIXME(20161008): should do a stricter check, but this is barely sufficient.
-    assert_eq!(self.dim.least_stride(), self.stride);
-    assert_eq!(self.dim.flat_len(), dim.flat_len());
-    Array2dViewMut{
-      buf:      self.buf,
-      dim:      dim,
-      stride:   dim.least_stride(),
-    }
-  }
-}*/
+pub mod prelude;
 
 thread_local!(static DRIVER_CONTEXT: Rc<DriverContext> = Rc::new(DriverContext{}));
 
@@ -250,6 +87,10 @@ pub struct DeviceConn {
 }
 
 impl DeviceConn {
+  pub fn sync(&self) {
+    self.stream.synchronize().unwrap();
+  }
+
   pub fn device(&self) -> usize {
     self.dev_idx
   }
@@ -418,6 +259,31 @@ impl<'a, T> DeviceMemRef<'a, T> where T: 'a + Copy {
   pub fn wait(&self, conn: &DeviceConn) {
     self.mem.tracker.borrow_mut().wait(conn);
   }
+
+  pub fn slice(self, start: usize, end: usize) -> DeviceMemRef<'a, T> {
+    let new_len = end - start;
+    assert!(new_len <= self.len);
+    DeviceMemRef{
+      mem:      self.mem,
+      offset:   self.offset + start,
+      len:      new_len,
+    }
+  }
+
+  pub fn store_sync(&mut self, output: &mut [T], conn: DeviceConn) {
+    assert_eq!(self.len(), output.len());
+    self.wait(&conn);
+    let status = unsafe { cuda_memcpy_async(
+        output.as_mut_ptr(),
+        self.mem.dptr,
+        self.len(),
+        CudaMemcpyKind::DeviceToHost,
+        &conn.stream,
+    ) };
+    self.post(&conn);
+    self.wait(&conn);
+    conn.sync();
+  }
 }
 
 pub struct DeviceMemRefMut<'a, T> where T: 'a + Copy {
@@ -450,6 +316,44 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
   pub fn wait(&self, conn: &DeviceConn) {
     self.mem.tracker.borrow_mut().wait(conn);
   }
+
+  pub fn slice_mut(self, start: usize, end: usize) -> DeviceMemRefMut<'a, T> {
+    let new_len = end - start;
+    assert!(new_len <= self.len);
+    DeviceMemRefMut{
+      mem:      self.mem,
+      offset:   self.offset + start,
+      len:      new_len,
+    }
+  }
+
+  pub fn copy(&mut self, src: DeviceMemRef<'a, T>, conn: DeviceConn) {
+    assert_eq!(self.len(), src.len());
+    self.wait(&conn);
+    let status = unsafe { cuda_memcpy_async(
+        self.mem.dptr,
+        src.as_ptr(),
+        self.len(),
+        CudaMemcpyKind::DeviceToDevice,
+        &conn.stream,
+    ) };
+    self.post(&conn);
+  }
+
+  pub fn load_sync(&mut self, input: &[T], conn: DeviceConn) {
+    assert_eq!(self.len(), input.len());
+    self.wait(&conn);
+    let status = unsafe { cuda_memcpy_async(
+        self.mem.dptr,
+        input.as_ptr(),
+        self.len(),
+        CudaMemcpyKind::HostToDevice,
+        &conn.stream,
+    ) };
+    self.post(&conn);
+    self.wait(&conn);
+    conn.sync();
+  }
 }
 
 pub struct DeviceArray1d<T> where T: Copy {
@@ -459,7 +363,7 @@ pub struct DeviceArray1d<T> where T: Copy {
   //_marker:  PhantomData<T>,
 }
 
-impl DeviceArray1d<u8> {
+/*impl DeviceArray1d<u8> {
   pub fn zeros(dim: usize, conn: DeviceConn) -> DeviceArray1d<u8> {
     let mut buf = unsafe { DeviceMem::alloc(dim, conn.clone()) };
     unsafe { cuda_memset_async(buf.dptr, 0, buf.size_bytes(), &*conn.stream) }.unwrap();
@@ -471,7 +375,7 @@ impl DeviceArray1d<u8> {
       //_marker:  PhantomData,
     }
   }
-}
+}*/
 
 impl DeviceArray1d<f32> {
   pub fn zeros(dim: usize, conn: DeviceConn) -> DeviceArray1d<f32> {
@@ -525,6 +429,54 @@ impl<'a, T> AsViewMut<'a, DeviceArray1dViewMut<'a, T>> for DeviceArray1d<T> wher
   }
 }
 
+impl<'a, T> Reshape<'a, usize, DeviceArray1dView<'a, T>> for DeviceMemRef<'a, T> where T: Copy {
+  fn reshape(self, dim: usize) -> DeviceArray1dView<'a, T> {
+    // Assume unit stride.
+    assert!(self.len() >= dim);
+    DeviceArray1dView{
+      buf:      self,
+      dim:      dim,
+      stride:   dim.least_stride(),
+    }
+  }
+}
+
+impl<'a, T> ReshapeMut<'a, usize, DeviceArray1dViewMut<'a, T>> for DeviceMemRefMut<'a, T> where T: Copy {
+  fn reshape_mut(self, dim: usize) -> DeviceArray1dViewMut<'a, T> {
+    // Assume unit stride.
+    assert!(self.len() >= dim);
+    DeviceArray1dViewMut{
+      buf:      self,
+      dim:      dim,
+      stride:   dim.least_stride(),
+    }
+  }
+}
+
+impl<'a, T> Reshape<'a, (usize, usize), DeviceArray2dView<'a, T>> for DeviceMemRef<'a, T> where T: Copy {
+  fn reshape(self, dim: (usize, usize)) -> DeviceArray2dView<'a, T> {
+    // Assume unit stride.
+    assert!(self.len() >= dim.flat_len());
+    DeviceArray2dView{
+      buf:      self,
+      dim:      dim,
+      stride:   dim.least_stride(),
+    }
+  }
+}
+
+impl<'a, T> ReshapeMut<'a, (usize, usize), DeviceArray2dViewMut<'a, T>> for DeviceMemRefMut<'a, T> where T: Copy {
+  fn reshape_mut(self, dim: (usize, usize)) -> DeviceArray2dViewMut<'a, T> {
+    // Assume unit stride.
+    assert!(self.len() >= dim.flat_len());
+    DeviceArray2dViewMut{
+      buf:      self,
+      dim:      dim,
+      stride:   dim.least_stride(),
+    }
+  }
+}
+
 pub struct DeviceArray1dView<'a, T> where T: 'a + Copy {
   buf:      DeviceMemRef<'a, T>,
   dim:      usize,
@@ -543,42 +495,77 @@ impl<'a, T> DeviceArray1dView<'a, T> where T: 'a + Copy {
   pub fn as_ptr(&self) -> *const T {
     self.buf.as_ptr()
   }
+
+  pub fn post(&self, conn: &DeviceConn) {
+    self.buf.post(conn);
+  }
+
+  pub fn wait(&self, conn: &DeviceConn) {
+    self.buf.wait(conn);
+  }
+
+  pub fn store_sync(&mut self, mut output: Array1dViewMut<'a, T>, conn: DeviceConn) {
+    assert_eq!(self.dim(), output.dim());
+    if self.stride() == self.dim().least_stride() && self.stride() == output.stride() {
+      self.buf.wait(&conn);
+      let status = unsafe { cuda_memcpy_async(
+          output.as_mut_ptr(),
+          self.as_ptr(),
+          self.dim().flat_len(),
+          CudaMemcpyKind::DeviceToHost,
+          &conn.stream,
+      ) };
+      self.buf.post(&conn);
+      self.buf.wait(&conn);
+      conn.sync();
+    } else {
+      unimplemented!();
+    }
+  }
 }
 
 impl<'a> DeviceArray1dView<'a, f32> {
 }
 
-/*impl<'a, T> View<'a, usize, DeviceArray1dView<'a, T>> for DeviceArray1dView<'a, T> where T: 'a + Copy {
-  fn view(&'a self, lo: usize, hi: usize) -> DeviceArray1dView<'a, T> {
+impl<'a, T> View<'a, usize, DeviceArray1dView<'a, T>> for DeviceArray1dView<'a, T> where T: 'a + Copy {
+  fn view(self, lo: usize, hi: usize) -> DeviceArray1dView<'a, T> {
     let new_dim = hi.diff(lo);
     let new_offset = lo.offset(self.stride);
     let new_offset_end = new_offset + new_dim.flat_len();
     DeviceArray1dView{
-      buf:      &self.buf[new_offset .. new_offset_end],
+      buf:      self.buf.slice(new_offset, new_offset_end),
       dim:      new_dim,
       stride:   self.stride,
     }
   }
-}*/
+}
+
+impl<'a, T> Reshape<'a, (usize, usize), DeviceArray2dView<'a, T>> for DeviceArray1dView<'a, T> where T: Copy {
+  fn reshape(self, dim: (usize, usize)) -> DeviceArray2dView<'a, T> {
+    assert!(dim == (self.dim, 1) || dim == (1, self.dim));
+    if dim.1 == 1 {
+      DeviceArray2dView{
+        buf:      self.buf,
+        dim:      dim,
+        stride:   (self.stride, self.stride * self.dim),
+      }
+    } else if dim.0 == 1 {
+      DeviceArray2dView{
+        buf:      self.buf,
+        dim:      dim,
+        stride:   (1, self.stride),
+      }
+    } else {
+      unreachable!();
+    }
+  }
+}
 
 pub struct DeviceArray1dViewMut<'a, T> where T: 'a + Copy {
   buf:      DeviceMemRefMut<'a, T>,
   dim:      usize,
   stride:   usize,
 }
-
-/*impl<'a, T> ViewMut<'a, usize, DeviceArray1dViewMut<'a, T>> for DeviceArray1dViewMut<'a, T> where T: 'a + Copy {
-  fn view_mut(&'a mut self, lo: usize, hi: usize) -> DeviceArray1dViewMut<'a, T> {
-    let new_dim = hi.diff(lo);
-    let new_offset = lo.offset(self.stride);
-    let new_offset_end = new_offset + new_dim.flat_len();
-    DeviceArray1dViewMut{
-      buf:      &mut self.buf[new_offset .. new_offset_end],
-      dim:      new_dim,
-      stride:   self.stride,
-    }
-  }
-}*/
 
 impl<'a, T> DeviceArray1dViewMut<'a, T> where T: 'a + Copy {
   pub fn dim(&self) -> usize {
@@ -591,6 +578,59 @@ impl<'a, T> DeviceArray1dViewMut<'a, T> where T: 'a + Copy {
 
   pub fn as_mut_ptr(&self) -> *mut T {
     self.buf.as_mut_ptr()
+  }
+
+  pub fn load_sync(&mut self, input: Array1dView<'a, T>, conn: DeviceConn) {
+    assert_eq!(self.dim(), input.dim());
+    if self.stride() == self.dim().least_stride() && self.stride() == input.stride() {
+      self.buf.wait(&conn);
+      let status = unsafe { cuda_memcpy_async(
+          self.as_mut_ptr(),
+          input.as_ptr(),
+          self.dim().flat_len(),
+          CudaMemcpyKind::HostToDevice,
+          &conn.stream,
+      ) };
+      self.buf.post(&conn);
+      self.buf.wait(&conn);
+      conn.sync();
+    } else {
+      unimplemented!();
+    }
+  }
+}
+
+impl<'a, T> ViewMut<'a, usize, DeviceArray1dViewMut<'a, T>> for DeviceArray1dViewMut<'a, T> where T: 'a + Copy {
+  fn view_mut(self, lo: usize, hi: usize) -> DeviceArray1dViewMut<'a, T> {
+    let new_dim = hi.diff(lo);
+    let new_offset = lo.offset(self.stride);
+    let new_offset_end = new_offset + new_dim.flat_len();
+    DeviceArray1dViewMut{
+      buf:      self.buf.slice_mut(new_offset, new_offset_end),
+      dim:      new_dim,
+      stride:   self.stride,
+    }
+  }
+}
+
+impl<'a, T> ReshapeMut<'a, (usize, usize), DeviceArray2dViewMut<'a, T>> for DeviceArray1dViewMut<'a, T> where T: Copy {
+  fn reshape_mut(self, dim: (usize, usize)) -> DeviceArray2dViewMut<'a, T> {
+    assert!(dim == (self.dim, 1) || dim == (1, self.dim));
+    if dim.1 == 1 {
+      DeviceArray2dViewMut{
+        buf:      self.buf,
+        dim:      dim,
+        stride:   (self.stride, self.stride * self.dim),
+      }
+    } else if dim.0 == 1 {
+      DeviceArray2dViewMut{
+        buf:      self.buf,
+        dim:      dim,
+        stride:   (1, self.stride),
+      }
+    } else {
+      unreachable!();
+    }
   }
 }
 
@@ -686,20 +726,47 @@ impl<'a, T> DeviceArray2dView<'a, T> where T: 'a + Copy {
   pub fn as_ptr(&self) -> *const T {
     self.buf.as_ptr()
   }
+
+  pub fn post(&self, conn: &DeviceConn) {
+    self.buf.post(conn);
+  }
+
+  pub fn wait(&self, conn: &DeviceConn) {
+    self.buf.wait(conn);
+  }
+
+  pub fn store_sync(&mut self, mut output: Array2dViewMut<'a, T>, conn: DeviceConn) {
+    assert_eq!(self.dim(), output.dim());
+    if self.stride() == self.dim().least_stride() && self.stride() == output.stride() {
+      self.buf.wait(&conn);
+      let status = unsafe { cuda_memcpy_async(
+          output.as_mut_ptr(),
+          self.as_ptr(),
+          self.dim().flat_len(),
+          CudaMemcpyKind::DeviceToHost,
+          &conn.stream,
+      ) };
+      self.buf.post(&conn);
+      self.buf.wait(&conn);
+      conn.sync();
+    } else {
+      unimplemented!();
+    }
+  }
 }
 
-/*impl<'a, T> View<'a, (usize, usize), Array2dView<'a, T>> for Array2dView<'a, T> where T: 'a + Copy {
-  fn view(&'a self, lo: (usize, usize), hi: (usize, usize)) -> Array2dView<'a, T> {
+impl<'a, T> View<'a, (usize, usize), DeviceArray2dView<'a, T>> for DeviceArray2dView<'a, T> where T: 'a + Copy {
+  fn view(self, lo: (usize, usize), hi: (usize, usize)) -> DeviceArray2dView<'a, T> {
     let new_dim = hi.diff(lo);
     let new_offset = lo.offset(self.stride);
     let new_offset_end = new_offset + new_dim.flat_len();
-    Array2dView{
-      buf:      &self.buf[new_offset .. new_offset_end],
+    DeviceArray2dView{
+      buf:      self.buf.slice(new_offset, new_offset_end),
       dim:      new_dim,
       stride:   self.stride,
     }
   }
-}*/
+}
 
 pub struct DeviceArray2dViewMut<'a, T> where T: 'a + Copy {
   buf:      DeviceMemRefMut<'a, T>,
@@ -718,6 +785,38 @@ impl<'a, T> DeviceArray2dViewMut<'a, T> where T: 'a + Copy {
 
   pub fn as_mut_ptr(&self) -> *mut T {
     self.buf.as_mut_ptr()
+  }
+
+  pub fn load_sync(&mut self, input: Array2dView<'a, T>, conn: DeviceConn) {
+    assert_eq!(self.dim(), input.dim());
+    if self.stride() == self.dim().least_stride() && self.stride() == input.stride() {
+      self.buf.wait(&conn);
+      let status = unsafe { cuda_memcpy_async(
+          self.as_mut_ptr(),
+          input.as_ptr(),
+          self.dim().flat_len(),
+          CudaMemcpyKind::HostToDevice,
+          &conn.stream,
+      ) };
+      self.buf.post(&conn);
+      self.buf.wait(&conn);
+      conn.sync();
+    } else {
+      unimplemented!();
+    }
+  }
+}
+
+impl<'a, T> ViewMut<'a, (usize, usize), DeviceArray2dViewMut<'a, T>> for DeviceArray2dViewMut<'a, T> where T: 'a + Copy {
+  fn view_mut(self, lo: (usize, usize), hi: (usize, usize)) -> DeviceArray2dViewMut<'a, T> {
+    let new_dim = hi.diff(lo);
+    let new_offset = lo.offset(self.stride);
+    let new_offset_end = new_offset + new_dim.flat_len();
+    DeviceArray2dViewMut{
+      buf:      self.buf.slice_mut(new_offset, new_offset_end),
+      dim:      new_dim,
+      stride:   self.stride,
+    }
   }
 }
 

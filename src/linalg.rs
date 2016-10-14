@@ -139,9 +139,37 @@ impl<'a> DeviceArray1dViewMut<'a, f32> {
 }
 
 impl<'a> DeviceArray2dViewMut<'a, f32> {
+  pub fn matrix_add(&mut self, alpha: f32, x: DeviceArray2dView<'a, f32>, conn: DeviceConn) {
+    let (x_m, x_n) = x.dim();
+    let (y_m, y_n) = self.dim();
+    assert_eq!(x_m, y_m);
+    assert_eq!(x_n, y_n);
+    let (incx, ldx) = x.stride();
+    let (incy, ldy) = self.stride();
+    if x_n == 1 {
+      x.buf.wait(&conn);
+      self.buf.wait(&conn);
+      let cublas = conn.cublas();
+      cublas.set_pointer_mode(CublasPointerMode::Host).unwrap();
+      unsafe { cublasSaxpy_v2(
+          cublas.ptr,
+          x_m as _,
+          &alpha as *const _,
+          x.as_ptr(),
+          incx as _,
+          self.as_mut_ptr(),
+          incy as _,
+      ) };
+      x.buf.post(&conn);
+      self.buf.post(&conn);
+    } else if x_m == 1 {
+      unimplemented!();
+    } else {
+      unimplemented!();
+    }
+  }
+
   pub fn matrix_prod(&mut self, alpha: f32, a: DeviceArray2dView<'a, f32>, a_trans: Transpose, b: DeviceArray2dView<'a, f32>, b_trans: Transpose, beta: f32, conn: DeviceConn) {
-    let cublas = conn.cublas();
-    cublas.set_pointer_mode(CublasPointerMode::Host).unwrap();
     let (a_m, a_n) = a.dim();
     let (b_m, b_n) = b.dim();
     let (c_m, c_n) = self.dim();
@@ -166,6 +194,8 @@ impl<'a> DeviceArray2dViewMut<'a, f32> {
     a.buf.wait(&conn);
     b.buf.wait(&conn);
     self.buf.wait(&conn);
+    let cublas = conn.cublas();
+    cublas.set_pointer_mode(CublasPointerMode::Host).unwrap();
     unsafe { cublasSgemm_v2(
         cublas.ptr,
         match a_trans {
