@@ -246,9 +246,18 @@ pub struct DeviceConn {
   dev_idx:  usize,
   stream:   Arc<CudaStream>,
   cublas:   Rc<RefCell<Option<Rc<CublasHandle>>>>,
+  //cudnn:    Rc<RefCell<Option<Rc<CudnnHandle>>>>,
 }
 
 impl DeviceConn {
+  pub fn device(&self) -> usize {
+    self.dev_idx
+  }
+
+  pub fn stream(&self) -> Arc<CudaStream> {
+    self.stream.clone()
+  }
+
   pub fn cublas(&self) -> Rc<CublasHandle> {
     {
       let mut cublas = self.cublas.borrow_mut();
@@ -269,6 +278,12 @@ pub struct DeviceMemDependencyTracker {
   posts:    Vec<Rc<CudaEvent>>,
 }
 
+impl Drop for DeviceMemDependencyTracker {
+  fn drop(&mut self) {
+    // FIXME(20161014): should we wait for outstanding posts?
+  }
+}
+
 impl DeviceMemDependencyTracker {
   pub fn new() -> DeviceMemDependencyTracker {
     DeviceMemDependencyTracker{
@@ -278,6 +293,10 @@ impl DeviceMemDependencyTracker {
   }
 
   pub fn post(&mut self, conn: &DeviceConn) {
+    let posts_count = self.posts.len();
+    if posts_count > 0 {
+      println!("WARNING: DeviceMemDependencyTracker::post(): {} events have been posted! This is likely a bug.", posts_count);
+    }
     let conn_id = conn.stream.ptr as usize;
     for &(ref stream, ref event) in self.events.iter() {
       if Arc::strong_count(stream) <= 1 {
@@ -299,6 +318,10 @@ impl DeviceMemDependencyTracker {
   }
 
   pub fn wait(&mut self, conn: &DeviceConn) {
+    let posts_count = self.posts.len();
+    if posts_count > 1 {
+      println!("WARNING: DeviceMemDependencyTracker::wait(): {} events have been posted! This is likely a bug.", posts_count);
+    }
     for post in self.posts.drain( .. ) {
       conn.stream.wait_event(&post).unwrap();
     }
