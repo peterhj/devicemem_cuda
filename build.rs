@@ -1,5 +1,7 @@
 extern crate gcc;
 
+use std::env;
+
 fn main() {
   gcc::Config::new()
     .compiler("/usr/local/cuda/bin/nvcc")
@@ -14,4 +16,6 @@ fn main() {
     .compile("libdevicemem_cuda_kernels.a");
 
   //println!("cargo:rustc-flags=-L /usr/local/cuda/lib64");
+  let out_dir = env::var("OUT_DIR").unwrap();
+  println!("cargo:rustc-link-search=native={}", out_dir);
 }

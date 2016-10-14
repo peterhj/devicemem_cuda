@@ -8,6 +8,10 @@ build = "build.rs"
 name = "devicemem_cuda"
 path = "src/lib.rs"
 
+[[bin]]
+name = "test"
+path = "test.rs"
+
 [build-dependencies]
 gcc = "*"
 
