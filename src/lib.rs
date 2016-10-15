@@ -176,8 +176,15 @@ pub struct DeviceMem<T> where T: Copy {
   tracker:  Rc<RefCell<DeviceMemDependencyTracker>>,
 }
 
-impl DeviceMem<f32> {
-  pub fn zeros(len: usize, conn: DeviceConn) -> DeviceMem<f32> {
+pub trait ZeroBits: Copy {}
+
+impl ZeroBits for f32 {}
+impl ZeroBits for f64 {}
+impl ZeroBits for u8 {}
+impl ZeroBits for u32 {}
+
+impl<T> DeviceMem<T> where T: ZeroBits {
+  pub fn zeros(len: usize, conn: DeviceConn) -> DeviceMem<T> {
     let mut buf = unsafe { DeviceMem::alloc(len, conn.clone()) };
     unsafe { cuda_memset_async(buf.dptr as *mut u8, 0, buf.size_bytes(), &*conn.stream) }.unwrap();
     buf.tracker.borrow_mut().post(&conn);
@@ -364,22 +371,8 @@ pub struct DeviceArray1d<T> where T: Copy {
   //_marker:  PhantomData<T>,
 }
 
-/*impl DeviceArray1d<u8> {
-  pub fn zeros(dim: usize, conn: DeviceConn) -> DeviceArray1d<u8> {
-    let mut buf = unsafe { DeviceMem::alloc(dim, conn.clone()) };
-    unsafe { cuda_memset_async(buf.dptr, 0, buf.size_bytes(), &*conn.stream) }.unwrap();
-    buf.tracker.borrow_mut().post(&conn);
-    DeviceArray1d{
-      buf:      buf,
-      dim:      dim,
-      stride:   dim.least_stride(),
-      //_marker:  PhantomData,
-    }
-  }
-}*/
-
-impl DeviceArray1d<f32> {
-  pub fn zeros(dim: usize, conn: DeviceConn) -> DeviceArray1d<f32> {
+impl<T> DeviceArray1d<T> where T: ZeroBits {
+  pub fn zeros(dim: usize, conn: DeviceConn) -> DeviceArray1d<T> {
     let mut buf = unsafe { DeviceMem::alloc(dim, conn.clone()) };
     unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.stream) }.unwrap();
     buf.tracker.borrow_mut().post(&conn);
@@ -666,8 +659,8 @@ pub struct DeviceArray2d<T> where T: Copy {
   stride:   (usize, usize),
 }
 
-impl DeviceArray2d<f32> {
-  pub fn zeros(dim: (usize, usize), conn: DeviceConn) -> DeviceArray2d<f32> {
+impl<T> DeviceArray2d<T> where T: ZeroBits {
+  pub fn zeros(dim: (usize, usize), conn: DeviceConn) -> DeviceArray2d<T> {
     let len = dim.flat_len();
     let mut buf = unsafe { DeviceMem::alloc(len, conn.clone()) };
     unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.stream) }.unwrap();
@@ -854,8 +847,8 @@ pub struct DeviceArray4d<T> where T: Copy {
   stride:   (usize, usize, usize, usize),
 }
 
-impl DeviceArray4d<f32> {
-  pub fn zeros(dim: (usize, usize, usize, usize), conn: DeviceConn) -> DeviceArray4d<f32> {
+impl<T> DeviceArray4d<T> where T: ZeroBits {
+  pub fn zeros(dim: (usize, usize, usize, usize), conn: DeviceConn) -> DeviceArray4d<T> {
     let len = dim.flat_len();
     let mut buf = unsafe { DeviceMem::alloc(len, conn.clone()) };
     unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.stream) }.unwrap();
