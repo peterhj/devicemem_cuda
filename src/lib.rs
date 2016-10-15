@@ -5,6 +5,7 @@
 
 extern crate cuda;
 extern crate cuda_blas;
+extern crate cuda_dnn;
 extern crate densearray;
 
 extern crate libc;
@@ -12,7 +13,8 @@ extern crate libc;
 use kernels::*;
 
 use cuda::runtime::*;
-use cuda_blas::*;
+use cuda_blas::{CublasHandle};
+use cuda_dnn::v5::{CudnnHandle};
 use densearray::prelude::*;
 
 use std::cell::{RefCell};
@@ -34,30 +36,22 @@ struct DriverContext {}
 impl !Send for DriverContext {}
 impl !Sync for DriverContext {}
 
-pub struct Device {
+#[derive(Clone)]
+pub struct DeviceStream {
   dev_idx:  usize,
   stream:   Arc<CudaStream>,
   cublas:   Rc<RefCell<Option<Rc<CublasHandle>>>>,
+  cudnn:    Rc<RefCell<Option<Rc<CudnnHandle>>>>,
 }
 
-impl Device {
-  pub fn count() -> usize {
-    CudaDevice::count().unwrap()
-  }
-
-  pub fn new(dev_idx: usize) -> Device {
-    DRIVER_CONTEXT.with(|driver| {
-      let driver = driver.clone();
-      assert!(Rc::strong_count(&driver) <= 2,
-          //"DeviceConn requires exclusive reference to DriverContext!");
-          "DriverContext does not support nesting");
-      CudaDevice::set_current(dev_idx).unwrap();
-      Device{
-        dev_idx:  dev_idx,
-        stream:   Arc::new(CudaStream::create().unwrap()),
-        cublas:   Rc::new(RefCell::new(None)),
-      }
-    })
+impl DeviceStream {
+  pub fn new(dev_idx: usize) -> DeviceStream {
+    DeviceStream{
+      dev_idx:  dev_idx,
+      stream:   Arc::new(CudaStream::create().unwrap()),
+      cublas:   Rc::new(RefCell::new(None)),
+      cudnn:    Rc::new(RefCell::new(None)),
+    }
   }
 
   pub fn conn(&self) -> DeviceConn {
@@ -72,6 +66,7 @@ impl Device {
         dev_idx:    self.dev_idx,
         stream:     self.stream.clone(),
         cublas:     self.cublas.clone(),
+        cudnn:      self.cudnn.clone(),
       }
     })
   }
@@ -83,7 +78,7 @@ pub struct DeviceConn {
   dev_idx:  usize,
   stream:   Arc<CudaStream>,
   cublas:   Rc<RefCell<Option<Rc<CublasHandle>>>>,
-  //cudnn:    Rc<RefCell<Option<Rc<CudnnHandle>>>>,
+  cudnn:    Rc<RefCell<Option<Rc<CudnnHandle>>>>,
 }
 
 impl DeviceConn {
@@ -95,7 +90,7 @@ impl DeviceConn {
     self.dev_idx
   }
 
-  pub fn stream(&self) -> Arc<CudaStream> {
+  pub fn raw_stream(&self) -> Arc<CudaStream> {
     self.stream.clone()
   }
 
@@ -111,6 +106,19 @@ impl DeviceConn {
     }
     let cublas = self.cublas.borrow();
     cublas.as_ref().unwrap().clone()
+  }
+
+  pub fn cudnn(&self) -> Rc<CudnnHandle> {
+    {
+      let mut cudnn = self.cudnn.borrow_mut();
+      if cudnn.is_none() {
+        let handle = CudnnHandle::create().unwrap();
+        handle.set_stream(&*self.stream).unwrap();
+        *cudnn = Some(Rc::new(handle));
+      }
+    }
+    let cudnn = self.cudnn.borrow();
+    cudnn.as_ref().unwrap().clone()
   }
 }
 
@@ -138,6 +146,10 @@ impl DeviceMemDependencyTracker {
     if posts_count > 0 {
       panic!("WARNING: DeviceMemDependencyTracker::post(): {} events have been posted! This is likely a bug.", posts_count);
     }
+    let events_count = self.events.len();
+    if events_count >= 100 {
+      panic!("WARNING: DeviceMemDependencyTracker::post(): {} events have been registered! This is likely a bug.", events_count);
+    }
     let conn_id = conn.stream.ptr as usize;
     for &(ref stream, ref event) in self.events.iter() {
       if Arc::strong_count(stream) <= 1 {
@@ -162,6 +174,10 @@ impl DeviceMemDependencyTracker {
     let posts_count = self.posts.len();
     if posts_count > 1 {
       panic!("WARNING: DeviceMemDependencyTracker::wait(): {} events have been posted! This is likely a bug.", posts_count);
+    }
+    let events_count = self.events.len();
+    if events_count >= 100 {
+      panic!("WARNING: DeviceMemDependencyTracker::wait(): {} events have been registered! This is likely a bug.", events_count);
     }
     for post in self.posts.drain( .. ) {
       conn.stream.wait_event(&post).unwrap();
