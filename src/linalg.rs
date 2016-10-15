@@ -98,6 +98,16 @@ impl<'a> DeviceArray1dViewMut<'a, f32> {
     }
   }
 
+  pub fn exp(&mut self, conn: DeviceConn) {
+    if self.stride == 1 {
+      self.buf.wait(&conn);
+      unsafe { devicemem_cuda_vector_exp_f32(self.as_mut_ptr(), self.dim(), conn.stream.ptr) };
+      self.buf.post(&conn);
+    } else {
+      unimplemented!();
+    }
+  }
+
   pub fn add(&mut self, alpha: f32, x: DeviceArray1dView<'a, f32>, beta: f32, conn: DeviceConn) {
     assert_eq!(self.dim(), x.dim());
     if self.stride == 1 {

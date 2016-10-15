@@ -136,7 +136,7 @@ impl DeviceMemDependencyTracker {
   pub fn post(&mut self, conn: &DeviceConn) {
     let posts_count = self.posts.len();
     if posts_count > 0 {
-      println!("WARNING: DeviceMemDependencyTracker::post(): {} events have been posted! This is likely a bug.", posts_count);
+      panic!("WARNING: DeviceMemDependencyTracker::post(): {} events have been posted! This is likely a bug.", posts_count);
     }
     let conn_id = conn.stream.ptr as usize;
     for &(ref stream, ref event) in self.events.iter() {
@@ -161,7 +161,7 @@ impl DeviceMemDependencyTracker {
   pub fn wait(&mut self, conn: &DeviceConn) {
     let posts_count = self.posts.len();
     if posts_count > 1 {
-      println!("WARNING: DeviceMemDependencyTracker::wait(): {} events have been posted! This is likely a bug.", posts_count);
+      panic!("WARNING: DeviceMemDependencyTracker::wait(): {} events have been posted! This is likely a bug.", posts_count);
     }
     for post in self.posts.drain( .. ) {
       conn.stream.wait_event(&post).unwrap();
@@ -283,7 +283,7 @@ impl<'a, T> DeviceMemRef<'a, T> where T: 'a + Copy {
     self.wait(&conn);
     let status = unsafe { cuda_memcpy_async(
         output.as_mut_ptr(),
-        self.mem.dptr,
+        self.as_ptr(),
         self.len(),
         CudaMemcpyKind::DeviceToHost,
         &conn.stream,
@@ -339,7 +339,7 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
     assert_eq!(self.len(), src.len());
     self.wait(&conn);
     let status = unsafe { cuda_memcpy_async(
-        self.mem.dptr,
+        self.as_mut_ptr(),
         src.as_ptr(),
         self.len(),
         CudaMemcpyKind::DeviceToDevice,
@@ -352,7 +352,7 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
     assert_eq!(self.len(), input.len());
     self.wait(&conn);
     let status = unsafe { cuda_memcpy_async(
-        self.mem.dptr,
+        self.as_mut_ptr(),
         input.as_ptr(),
         self.len(),
         CudaMemcpyKind::HostToDevice,
@@ -361,6 +361,14 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
     self.post(&conn);
     self.wait(&conn);
     conn.sync();
+  }
+}
+
+impl<'a> DeviceMemRefMut<'a, f32> {
+  pub fn set_constant(&mut self, c: f32, conn: DeviceConn) {
+    self.wait(&conn);
+    unsafe { devicemem_cuda_vector_set_scalar_f32(self.as_mut_ptr(), self.len(), c, conn.stream.ptr) };
+    self.post(&conn);
   }
 }
 
@@ -630,7 +638,7 @@ impl<'a, T> ReshapeMut<'a, (usize, usize), DeviceArray2dViewMut<'a, T>> for Devi
 }
 
 impl<'a> DeviceArray1dViewMut<'a, u8> {
-  pub fn set_constant(&'a mut self, c: u8, conn: DeviceConn) {
+  pub fn set_constant(&mut self, c: u8, conn: DeviceConn) {
     if self.stride == 1 {
       self.buf.wait(&conn);
       unsafe { cuda_memset_async(self.buf.as_mut_ptr(), 0, self.buf.size_bytes(), &*conn.stream) }.unwrap();
@@ -642,7 +650,7 @@ impl<'a> DeviceArray1dViewMut<'a, u8> {
 }
 
 impl<'a> DeviceArray1dViewMut<'a, f32> {
-  pub fn set_constant(&'a mut self, c: f32, conn: DeviceConn) {
+  pub fn set_constant(&mut self, c: f32, conn: DeviceConn) {
     if self.stride == 1 {
       self.buf.wait(&conn);
       unsafe { devicemem_cuda_vector_set_scalar_f32(self.buf.as_mut_ptr(), self.dim(), c, conn.stream.ptr) };
