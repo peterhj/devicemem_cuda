@@ -233,6 +233,7 @@ impl<T> DeviceMem<T> where T: Copy {
   }
 }
 
+#[derive(Clone)]
 pub struct DeviceMemRef<'a, T> where T: 'a + Copy {
   mem:      &'a DeviceMem<T>,
   offset:   usize,
@@ -477,6 +478,7 @@ impl<'a, T> ReshapeMut<'a, (usize, usize), DeviceArray2dViewMut<'a, T>> for Devi
   }
 }
 
+#[derive(Clone)]
 pub struct DeviceArray1dView<'a, T> where T: 'a + Copy {
   buf:      DeviceMemRef<'a, T>,
   dim:      usize,
@@ -708,6 +710,7 @@ impl<'a, T> AsViewMut<'a, DeviceArray2dViewMut<'a, T>> for DeviceArray2d<T> wher
   }
 }
 
+#[derive(Clone)]
 pub struct DeviceArray2dView<'a, T> where T: 'a + Copy {
   buf:      DeviceMemRef<'a, T>,
   dim:      (usize, usize),
