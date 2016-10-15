@@ -599,6 +599,31 @@ impl<'a, T> DeviceArray1dViewMut<'a, T> where T: 'a + Copy {
     self.buf.as_mut_ptr()
   }
 
+  pub fn post(&self, conn: &DeviceConn) {
+    self.buf.post(conn);
+  }
+
+  pub fn wait(&self, conn: &DeviceConn) {
+    self.buf.wait(conn);
+  }
+
+  pub fn copy(&mut self, src: DeviceArray1dView<'a, T>, conn: DeviceConn) {
+    assert_eq!(self.dim(), src.dim());
+    if self.stride() == self.dim().least_stride() && self.stride() == src.stride() {
+      self.wait(&conn);
+      let status = unsafe { cuda_memcpy_async(
+          self.as_mut_ptr(),
+          src.as_ptr(),
+          self.dim().flat_len(),
+          CudaMemcpyKind::DeviceToDevice,
+          &conn.stream,
+      ) };
+      self.post(&conn);
+    } else {
+      unimplemented!();
+    }
+  }
+
   pub fn load_sync(&mut self, input: Array1dView<'a, T>, conn: DeviceConn) {
     assert_eq!(self.dim(), input.dim());
     if self.stride() == self.dim().least_stride() && self.stride() == input.stride() {
@@ -807,6 +832,31 @@ impl<'a, T> DeviceArray2dViewMut<'a, T> where T: 'a + Copy {
     self.buf.as_mut_ptr()
   }
 
+  pub fn post(&self, conn: &DeviceConn) {
+    self.buf.post(conn);
+  }
+
+  pub fn wait(&self, conn: &DeviceConn) {
+    self.buf.wait(conn);
+  }
+
+  pub fn copy(&mut self, src: DeviceArray2dView<'a, T>, conn: DeviceConn) {
+    assert_eq!(self.dim(), src.dim());
+    if self.stride() == self.dim().least_stride() && self.stride() == src.stride() {
+      self.wait(&conn);
+      let status = unsafe { cuda_memcpy_async(
+          self.as_mut_ptr(),
+          src.as_ptr(),
+          self.dim().flat_len(),
+          CudaMemcpyKind::DeviceToDevice,
+          &conn.stream,
+      ) };
+      self.post(&conn);
+    } else {
+      unimplemented!();
+    }
+  }
+
   pub fn load_sync(&mut self, input: Array2dView<'a, T>, conn: DeviceConn) {
     assert_eq!(self.dim(), input.dim());
     if self.stride() == self.dim().least_stride() && self.stride() == input.stride() {
@@ -933,6 +983,33 @@ impl<'a, T> DeviceArray4dView<'a, T> where T: 'a + Copy {
   pub fn as_ptr(&self) -> *const T {
     self.buf.as_ptr()
   }
+
+  pub fn post(&self, conn: &DeviceConn) {
+    self.buf.post(conn);
+  }
+
+  pub fn wait(&self, conn: &DeviceConn) {
+    self.buf.wait(conn);
+  }
+
+  pub fn store_sync(&mut self, mut output: Array4dViewMut<'a, T>, conn: DeviceConn) {
+    assert_eq!(self.dim(), output.dim());
+    if self.stride() == self.dim().least_stride() && self.stride() == output.stride() {
+      self.buf.wait(&conn);
+      let status = unsafe { cuda_memcpy_async(
+          output.as_mut_ptr(),
+          self.as_ptr(),
+          self.dim().flat_len(),
+          CudaMemcpyKind::DeviceToHost,
+          &conn.stream,
+      ) };
+      self.buf.post(&conn);
+      self.buf.wait(&conn);
+      conn.sync();
+    } else {
+      unimplemented!();
+    }
+  }
 }
 
 pub struct DeviceArray4dViewMut<'a, T> where T: 'a + Copy {
@@ -952,6 +1029,50 @@ impl<'a, T> DeviceArray4dViewMut<'a, T> where T: 'a + Copy {
 
   pub fn as_mut_ptr(&self) -> *mut T {
     self.buf.as_mut_ptr()
+  }
+
+  pub fn post(&self, conn: &DeviceConn) {
+    self.buf.post(conn);
+  }
+
+  pub fn wait(&self, conn: &DeviceConn) {
+    self.buf.wait(conn);
+  }
+
+  pub fn copy(&mut self, src: DeviceArray4dView<'a, T>, conn: DeviceConn) {
+    assert_eq!(self.dim(), src.dim());
+    if self.stride() == self.dim().least_stride() && self.stride() == src.stride() {
+      self.wait(&conn);
+      let status = unsafe { cuda_memcpy_async(
+          self.as_mut_ptr(),
+          src.as_ptr(),
+          self.dim().flat_len(),
+          CudaMemcpyKind::DeviceToDevice,
+          &conn.stream,
+      ) };
+      self.post(&conn);
+    } else {
+      unimplemented!();
+    }
+  }
+
+  pub fn load_sync(&mut self, input: Array4dView<'a, T>, conn: DeviceConn) {
+    assert_eq!(self.dim(), input.dim());
+    if self.stride() == self.dim().least_stride() && self.stride() == input.stride() {
+      self.buf.wait(&conn);
+      let status = unsafe { cuda_memcpy_async(
+          self.as_mut_ptr(),
+          input.as_ptr(),
+          self.dim().flat_len(),
+          CudaMemcpyKind::HostToDevice,
+          &conn.stream,
+      ) };
+      self.buf.post(&conn);
+      self.buf.wait(&conn);
+      conn.sync();
+    } else {
+      unimplemented!();
+    }
   }
 }
 
