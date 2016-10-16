@@ -108,12 +108,12 @@ impl<'a> DeviceArray1dViewMut<'a, f32> {
     }
   }
 
-  pub fn add(&mut self, alpha: f32, x: DeviceArray1dView<'a, f32>, beta: f32, conn: DeviceConn) {
+  pub fn add(&mut self, alpha: f32, x: DeviceArray1dView<'a, f32>, conn: DeviceConn) {
     assert_eq!(self.dim(), x.dim());
     if self.stride == 1 {
       x.buf.wait(&conn);
       self.buf.wait(&conn);
-      unsafe { devicemem_cuda_vector_add_f32(x.as_ptr(), self.dim(), alpha, beta, self.as_mut_ptr(), conn.stream.ptr) };
+      unsafe { devicemem_cuda_vector_add_f32(x.as_ptr(), self.dim(), alpha, self.as_mut_ptr(), conn.stream.ptr) };
       x.buf.post(&conn);
       self.buf.post(&conn);
     } else {

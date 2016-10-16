@@ -157,12 +157,11 @@ __global__ void vector_add_f32_kernel(
     const float *src,
     int dim,
     float alpha,
-    float beta,
     float *dst)
 {
   int idx = threadIdx.x + blockIdx.x * blockDim.x;
   if (idx < dim) {
-    float y = alpha * src[idx] + beta * dst[idx];
+    float y = alpha * src[idx] + dst[idx];
     dst[idx] = y;
   }
 }
@@ -171,12 +170,11 @@ extern "C" void devicemem_cuda_vector_add_f32(
     const float *src,
     size_t dim,
     float alpha,
-    float beta,
     float *dst,
     cudaStream_t stream)
 {
   vector_add_f32_kernel<<<(dim+1024-1)/1024, 1024, 0, stream>>>(
-      src, dim, alpha, beta, dst);
+      src, dim, alpha, dst);
 }
 
 __global__ void vector_average_f32_kernel(
