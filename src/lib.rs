@@ -46,19 +46,26 @@ pub struct DeviceStream {
 
 impl DeviceStream {
   pub fn new(dev_idx: usize) -> DeviceStream {
-    DeviceStream{
-      dev_idx:  dev_idx,
-      stream:   Arc::new(CudaStream::create().unwrap()),
-      cublas:   Rc::new(RefCell::new(None)),
-      cudnn:    Rc::new(RefCell::new(None)),
-    }
+    DRIVER_CONTEXT.with(|driver| {
+      let driver = driver.clone();
+      assert!(Rc::strong_count(&driver) <= 2,
+          "DriverContext does not support nesting");
+      CudaDevice::set_current(dev_idx).unwrap();
+      DeviceStream{
+        dev_idx:  dev_idx,
+        stream:   Arc::new(CudaStream::create().unwrap()),
+        cublas:   Rc::new(RefCell::new(None)),
+        cudnn:    Rc::new(RefCell::new(None)),
+      }
+    })
   }
 
   pub fn conn(&self) -> DeviceConn {
     DRIVER_CONTEXT.with(|driver| {
       let driver = driver.clone();
+      /*while Rc::strong_count(&driver) > 2 {
+      }*/
       assert!(Rc::strong_count(&driver) <= 2,
-          //"DeviceConn requires exclusive reference to DriverContext!");
           "DriverContext does not support nesting");
       CudaDevice::set_current(self.dev_idx).unwrap();
       DeviceConn{
