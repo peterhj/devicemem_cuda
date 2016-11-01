@@ -78,6 +78,16 @@ impl<'a> DeviceArray1dViewMut<'a, f32> {
     }
   }
 
+  pub fn div_scalar(&mut self, alpha: f32, conn: DeviceConn) {
+    if self.stride == 1 {
+      self.buf.wait(&conn);
+      unsafe { devicemem_cuda_vector_div_scalar_f32(self.as_mut_ptr(), self.dim(), alpha, conn.stream.ptr) };
+      self.buf.post(&conn);
+    } else {
+      unimplemented!();
+    }
+  }
+
   pub fn square(&mut self, conn: DeviceConn) {
     if self.stride == 1 {
       self.buf.wait(&conn);

@@ -69,6 +69,28 @@ extern "C" void devicemem_cuda_vector_scale_f32(
       dst, dim, alpha);
 }
 
+__global__ void vector_div_scalar_f32_kernel(
+    float *dst,
+    int dim,
+    float c)
+{
+  int idx = threadIdx.x + blockIdx.x * blockDim.x;
+  if (idx < dim) {
+    float y = dst[idx] / c;
+    dst[idx] = y;
+  }
+}
+
+extern "C" void devicemem_cuda_vector_div_scalar_f32(
+    float *dst,
+    size_t dim,
+    float c,
+    cudaStream_t stream)
+{
+  vector_div_scalar_f32_kernel<<<(dim+1024-1)/1024, 1024, 0, stream>>>(
+      dst, dim, c);
+}
+
 __global__ void vector_exp_f32_kernel(
     float *xs,
     int dim)

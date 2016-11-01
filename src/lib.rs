@@ -304,6 +304,7 @@ impl<'a, T> DeviceMemRef<'a, T> where T: 'a + Copy {
   pub fn store_sync(&mut self, output: &mut [T], conn: DeviceConn) {
     assert_eq!(self.len(), output.len());
     self.wait(&conn);
+    conn.sync();
     let status = unsafe { cuda_memcpy_async(
         output.as_mut_ptr(),
         self.as_ptr(),
@@ -374,6 +375,7 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
   pub fn load_sync(&mut self, input: &[T], conn: DeviceConn) {
     assert_eq!(self.len(), input.len());
     self.wait(&conn);
+    conn.sync();
     let status = unsafe { cuda_memcpy_async(
         self.as_mut_ptr(),
         input.as_ptr(),
@@ -502,6 +504,32 @@ impl<'a, T> ReshapeMut<'a, (usize, usize), DeviceArray2dViewMut<'a, T>> for Devi
   }
 }
 
+impl<'a, T> Reshape<'a, (usize, usize), DeviceArray2dView<'a, T>> for DeviceArray4dView<'a, T> where T: Copy {
+  fn reshape(self, dim: (usize, usize)) -> DeviceArray2dView<'a, T> {
+    // FIXME(20161008): should do a stricter check, but this is barely sufficient.
+    assert_eq!(self.dim.least_stride(), self.stride);
+    assert_eq!(self.dim.flat_len(), dim.flat_len());
+    DeviceArray2dView{
+      buf:      self.buf,
+      dim:      dim,
+      stride:   dim.least_stride(),
+    }
+  }
+}
+
+impl<'a, T> ReshapeMut<'a, (usize, usize), DeviceArray2dViewMut<'a, T>> for DeviceArray4dViewMut<'a, T> where T: Copy {
+  fn reshape_mut(self, dim: (usize, usize)) -> DeviceArray2dViewMut<'a, T> {
+    // FIXME(20161008): should do a stricter check, but this is barely sufficient.
+    assert_eq!(self.dim.least_stride(), self.stride);
+    assert_eq!(self.dim.flat_len(), dim.flat_len());
+    DeviceArray2dViewMut{
+      buf:      self.buf,
+      dim:      dim,
+      stride:   dim.least_stride(),
+    }
+  }
+}
+
 #[derive(Clone)]
 pub struct DeviceArray1dView<'a, T> where T: 'a + Copy {
   buf:      DeviceMemRef<'a, T>,
@@ -534,6 +562,7 @@ impl<'a, T> DeviceArray1dView<'a, T> where T: 'a + Copy {
     assert_eq!(self.dim(), output.dim());
     if self.stride() == self.dim().least_stride() && self.stride() == output.stride() {
       self.buf.wait(&conn);
+      conn.sync();
       let status = unsafe { cuda_memcpy_async(
           output.as_mut_ptr(),
           self.as_ptr(),
@@ -635,6 +664,7 @@ impl<'a, T> DeviceArray1dViewMut<'a, T> where T: 'a + Copy {
     assert_eq!(self.dim(), input.dim());
     if self.stride() == self.dim().least_stride() && self.stride() == input.stride() {
       self.buf.wait(&conn);
+      conn.sync();
       let status = unsafe { cuda_memcpy_async(
           self.as_mut_ptr(),
           input.as_ptr(),
@@ -791,6 +821,7 @@ impl<'a, T> DeviceArray2dView<'a, T> where T: 'a + Copy {
     assert_eq!(self.dim(), output.dim());
     if self.stride() == self.dim().least_stride() && self.stride() == output.stride() {
       self.buf.wait(&conn);
+      conn.sync();
       let status = unsafe { cuda_memcpy_async(
           output.as_mut_ptr(),
           self.as_ptr(),
@@ -868,6 +899,7 @@ impl<'a, T> DeviceArray2dViewMut<'a, T> where T: 'a + Copy {
     assert_eq!(self.dim(), input.dim());
     if self.stride() == self.dim().least_stride() && self.stride() == input.stride() {
       self.buf.wait(&conn);
+      conn.sync();
       let status = unsafe { cuda_memcpy_async(
           self.as_mut_ptr(),
           input.as_ptr(),
@@ -1003,6 +1035,7 @@ impl<'a, T> DeviceArray4dView<'a, T> where T: 'a + Copy {
     assert_eq!(self.dim(), output.dim());
     if self.stride() == self.dim().least_stride() && self.stride() == output.stride() {
       self.buf.wait(&conn);
+      conn.sync();
       let status = unsafe { cuda_memcpy_async(
           output.as_mut_ptr(),
           self.as_ptr(),
@@ -1067,6 +1100,7 @@ impl<'a, T> DeviceArray4dViewMut<'a, T> where T: 'a + Copy {
     assert_eq!(self.dim(), input.dim());
     if self.stride() == self.dim().least_stride() && self.stride() == input.stride() {
       self.buf.wait(&conn);
+      conn.sync();
       let status = unsafe { cuda_memcpy_async(
           self.as_mut_ptr(),
           input.as_ptr(),
