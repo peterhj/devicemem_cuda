@@ -14,7 +14,7 @@ use kernels::*;
 
 use cuda::runtime::*;
 use cuda_blas::{CublasHandle};
-use cuda_dnn::v5::{CudnnHandle};
+use cuda_dnn::v4::{CudnnHandle};
 use densearray::prelude::*;
 
 use std::cell::{RefCell};
@@ -53,11 +53,16 @@ impl DeviceStream {
       CudaDevice::set_current(dev_idx).unwrap();
       DeviceStream{
         dev_idx:  dev_idx,
-        stream:   Arc::new(CudaStream::create().unwrap()),
+        //stream:   Arc::new(CudaStream::create().unwrap()),
+        stream:   Arc::new(CudaStream::default()),
         cublas:   Rc::new(RefCell::new(None)),
         cudnn:    Rc::new(RefCell::new(None)),
       }
     })
+  }
+
+  pub fn sync(&self) {
+    self.stream.synchronize().unwrap();
   }
 
   pub fn conn(&self) -> DeviceConn {
@@ -157,7 +162,7 @@ impl DeviceMemDependencyTracker {
     if events_count >= 100 {
       panic!("WARNING: DeviceMemDependencyTracker::post(): {} events have been registered! This is likely a bug.", events_count);
     }
-    let conn_id = conn.stream.ptr as usize;
+    let conn_id = conn.raw_stream().ptr as usize;
     for &(ref stream, ref event) in self.events.iter() {
       if Arc::strong_count(stream) <= 1 {
         // FIXME(20160925): the stream is unreachable from outside, so drop it.
@@ -166,14 +171,14 @@ impl DeviceMemDependencyTracker {
       let id = stream.ptr as usize;
       if conn_id == id {
         let event = event.clone();
-        event.record(&conn.stream).unwrap();
+        event.record(&conn.raw_stream()).unwrap();
         self.posts.push(event);
         return;
       }
     }
     let event = Rc::new(CudaEvent::create_fastest().unwrap());
-    self.events.push((conn.stream.clone(), event.clone()));
-    event.record(&conn.stream).unwrap();
+    self.events.push((conn.raw_stream().clone(), event.clone()));
+    event.record(&conn.raw_stream()).unwrap();
     self.posts.push(event);
   }
 
@@ -187,7 +192,7 @@ impl DeviceMemDependencyTracker {
       panic!("WARNING: DeviceMemDependencyTracker::wait(): {} events have been registered! This is likely a bug.", events_count);
     }
     for post in self.posts.drain( .. ) {
-      conn.stream.wait_event(&post).unwrap();
+      conn.raw_stream().wait_event(&post).unwrap();
     }
   }
 }
@@ -209,7 +214,7 @@ impl ZeroBits for u32 {}
 impl<T> DeviceMem<T> where T: ZeroBits {
   pub fn zeros(len: usize, conn: DeviceConn) -> DeviceMem<T> {
     let mut buf = unsafe { DeviceMem::alloc(len, conn.clone()) };
-    unsafe { cuda_memset_async(buf.dptr as *mut u8, 0, buf.size_bytes(), &*conn.stream) }.unwrap();
+    unsafe { cuda_memset_async(buf.dptr as *mut u8, 0, buf.size_bytes(), &*conn.raw_stream()) }.unwrap();
     buf.tracker.borrow_mut().post(&conn);
     buf
   }
@@ -310,7 +315,7 @@ impl<'a, T> DeviceMemRef<'a, T> where T: 'a + Copy {
         self.as_ptr(),
         self.len(),
         CudaMemcpyKind::DeviceToHost,
-        &conn.stream,
+        &conn.raw_stream(),
     ) };
     self.post(&conn);
     self.wait(&conn);
@@ -367,7 +372,7 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
         src.as_ptr(),
         self.len(),
         CudaMemcpyKind::DeviceToDevice,
-        &conn.stream,
+        &conn.raw_stream(),
     ) };
     self.post(&conn);
   }
@@ -381,7 +386,7 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
         input.as_ptr(),
         self.len(),
         CudaMemcpyKind::HostToDevice,
-        &conn.stream,
+        &conn.raw_stream(),
     ) };
     self.post(&conn);
     self.wait(&conn);
@@ -392,7 +397,7 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
 impl<'a> DeviceMemRefMut<'a, f32> {
   pub fn set_constant(&mut self, c: f32, conn: DeviceConn) {
     self.wait(&conn);
-    unsafe { devicemem_cuda_vector_set_scalar_f32(self.as_mut_ptr(), self.len(), c, conn.stream.ptr) };
+    unsafe { devicemem_cuda_vector_set_scalar_f32(self.as_mut_ptr(), self.len(), c, conn.raw_stream().ptr) };
     self.post(&conn);
   }
 }
@@ -407,7 +412,7 @@ pub struct DeviceArray1d<T> where T: Copy {
 impl<T> DeviceArray1d<T> where T: ZeroBits {
   pub fn zeros(dim: usize, conn: DeviceConn) -> DeviceArray1d<T> {
     let mut buf = unsafe { DeviceMem::alloc(dim, conn.clone()) };
-    unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.stream) }.unwrap();
+    unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.raw_stream()) }.unwrap();
     buf.tracker.borrow_mut().post(&conn);
     DeviceArray1d{
       buf:      buf,
@@ -504,6 +509,54 @@ impl<'a, T> ReshapeMut<'a, (usize, usize), DeviceArray2dViewMut<'a, T>> for Devi
   }
 }
 
+impl<'a, T> Reshape<'a, usize, DeviceArray1dView<'a, T>> for DeviceArray2dView<'a, T> where T: Copy {
+  fn reshape(self, dim: usize) -> DeviceArray1dView<'a, T> {
+    // Assume unit stride.
+    assert_eq!(self.dim.flat_len(), dim);
+    DeviceArray1dView{
+      buf:      self.buf,
+      dim:      dim,
+      stride:   dim.least_stride(),
+    }
+  }
+}
+
+impl<'a, T> ReshapeMut<'a, usize, DeviceArray1dViewMut<'a, T>> for DeviceArray2dViewMut<'a, T> where T: Copy {
+  fn reshape_mut(self, dim: usize) -> DeviceArray1dViewMut<'a, T> {
+    // Assume unit stride.
+    assert_eq!(self.dim.flat_len(), dim);
+    DeviceArray1dViewMut{
+      buf:      self.buf,
+      dim:      dim,
+      stride:   dim.least_stride(),
+    }
+  }
+}
+
+impl<'a, T> Reshape<'a, usize, DeviceArray1dView<'a, T>> for DeviceArray4dView<'a, T> where T: Copy {
+  fn reshape(self, dim: usize) -> DeviceArray1dView<'a, T> {
+    // Assume unit stride.
+    assert_eq!(self.dim.flat_len(), dim);
+    DeviceArray1dView{
+      buf:      self.buf,
+      dim:      dim,
+      stride:   dim.least_stride(),
+    }
+  }
+}
+
+impl<'a, T> ReshapeMut<'a, usize, DeviceArray1dViewMut<'a, T>> for DeviceArray4dViewMut<'a, T> where T: Copy {
+  fn reshape_mut(self, dim: usize) -> DeviceArray1dViewMut<'a, T> {
+    // Assume unit stride.
+    assert_eq!(self.dim.flat_len(), dim);
+    DeviceArray1dViewMut{
+      buf:      self.buf,
+      dim:      dim,
+      stride:   dim.least_stride(),
+    }
+  }
+}
+
 impl<'a, T> Reshape<'a, (usize, usize), DeviceArray2dView<'a, T>> for DeviceArray4dView<'a, T> where T: Copy {
   fn reshape(self, dim: (usize, usize)) -> DeviceArray2dView<'a, T> {
     // FIXME(20161008): should do a stricter check, but this is barely sufficient.
@@ -568,7 +621,7 @@ impl<'a, T> DeviceArray1dView<'a, T> where T: 'a + Copy {
           self.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::DeviceToHost,
-          &conn.stream,
+          &conn.raw_stream(),
       ) };
       self.buf.post(&conn);
       self.buf.wait(&conn);
@@ -652,7 +705,7 @@ impl<'a, T> DeviceArray1dViewMut<'a, T> where T: 'a + Copy {
           src.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::DeviceToDevice,
-          &conn.stream,
+          &conn.raw_stream(),
       ) };
       self.post(&conn);
     } else {
@@ -670,7 +723,7 @@ impl<'a, T> DeviceArray1dViewMut<'a, T> where T: 'a + Copy {
           input.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::HostToDevice,
-          &conn.stream,
+          &conn.raw_stream(),
       ) };
       self.buf.post(&conn);
       self.buf.wait(&conn);
@@ -719,7 +772,7 @@ impl<'a> DeviceArray1dViewMut<'a, u8> {
   pub fn set_constant(&mut self, c: u8, conn: DeviceConn) {
     if self.stride == 1 {
       self.buf.wait(&conn);
-      unsafe { cuda_memset_async(self.buf.as_mut_ptr(), 0, self.buf.size_bytes(), &*conn.stream) }.unwrap();
+      unsafe { cuda_memset_async(self.buf.as_mut_ptr(), 0, self.buf.size_bytes(), &*conn.raw_stream()) }.unwrap();
       self.buf.post(&conn);
     } else {
       unimplemented!();
@@ -731,7 +784,7 @@ impl<'a> DeviceArray1dViewMut<'a, f32> {
   pub fn set_constant(&mut self, c: f32, conn: DeviceConn) {
     if self.stride == 1 {
       self.buf.wait(&conn);
-      unsafe { devicemem_cuda_vector_set_scalar_f32(self.buf.as_mut_ptr(), self.dim(), c, conn.stream.ptr) };
+      unsafe { devicemem_cuda_vector_set_scalar_f32(self.buf.as_mut_ptr(), self.dim(), c, conn.raw_stream().ptr) };
       self.buf.post(&conn);
     } else {
       unimplemented!();
@@ -749,7 +802,7 @@ impl<T> DeviceArray2d<T> where T: ZeroBits {
   pub fn zeros(dim: (usize, usize), conn: DeviceConn) -> DeviceArray2d<T> {
     let len = dim.flat_len();
     let mut buf = unsafe { DeviceMem::alloc(len, conn.clone()) };
-    unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.stream) }.unwrap();
+    unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.raw_stream()) }.unwrap();
     buf.tracker.borrow_mut().post(&conn);
     DeviceArray2d{
       buf:      buf,
@@ -827,7 +880,7 @@ impl<'a, T> DeviceArray2dView<'a, T> where T: 'a + Copy {
           self.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::DeviceToHost,
-          &conn.stream,
+          &conn.raw_stream(),
       ) };
       self.buf.post(&conn);
       self.buf.wait(&conn);
@@ -887,7 +940,7 @@ impl<'a, T> DeviceArray2dViewMut<'a, T> where T: 'a + Copy {
           src.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::DeviceToDevice,
-          &conn.stream,
+          &conn.raw_stream(),
       ) };
       self.post(&conn);
     } else {
@@ -905,7 +958,7 @@ impl<'a, T> DeviceArray2dViewMut<'a, T> where T: 'a + Copy {
           input.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::HostToDevice,
-          &conn.stream,
+          &conn.raw_stream(),
       ) };
       self.buf.post(&conn);
       self.buf.wait(&conn);
@@ -933,7 +986,7 @@ impl<'a> DeviceArray2dViewMut<'a, f32> {
   pub fn set_constant(&'a mut self, c: f32, conn: DeviceConn) {
     if self.stride == self.dim.least_stride() {
       self.buf.wait(&conn);
-      unsafe { devicemem_cuda_vector_set_scalar_f32(self.buf.as_mut_ptr(), self.dim.flat_len(), c, conn.stream.ptr) };
+      unsafe { devicemem_cuda_vector_set_scalar_f32(self.buf.as_mut_ptr(), self.dim.flat_len(), c, conn.raw_stream().ptr) };
       self.buf.post(&conn);
     } else {
       unimplemented!();
@@ -964,7 +1017,7 @@ impl<T> DeviceArray4d<T> where T: ZeroBits {
   pub fn zeros(dim: (usize, usize, usize, usize), conn: DeviceConn) -> DeviceArray4d<T> {
     let len = dim.flat_len();
     let mut buf = unsafe { DeviceMem::alloc(len, conn.clone()) };
-    unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.stream) }.unwrap();
+    unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.raw_stream()) }.unwrap();
     buf.tracker.borrow_mut().post(&conn);
     DeviceArray4d{
       buf:      buf,
@@ -1041,7 +1094,7 @@ impl<'a, T> DeviceArray4dView<'a, T> where T: 'a + Copy {
           self.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::DeviceToHost,
-          &conn.stream,
+          &conn.raw_stream(),
       ) };
       self.buf.post(&conn);
       self.buf.wait(&conn);
@@ -1088,7 +1141,7 @@ impl<'a, T> DeviceArray4dViewMut<'a, T> where T: 'a + Copy {
           src.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::DeviceToDevice,
-          &conn.stream,
+          &conn.raw_stream(),
       ) };
       self.post(&conn);
     } else {
@@ -1106,7 +1159,7 @@ impl<'a, T> DeviceArray4dViewMut<'a, T> where T: 'a + Copy {
           input.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::HostToDevice,
-          &conn.stream,
+          &conn.raw_stream(),
       ) };
       self.buf.post(&conn);
       self.buf.wait(&conn);
@@ -1121,7 +1174,7 @@ impl<'a> DeviceArray4dViewMut<'a, f32> {
   pub fn set_constant(&'a mut self, c: f32, conn: DeviceConn) {
     if self.stride == self.dim.least_stride() {
       self.buf.wait(&conn);
-      unsafe { devicemem_cuda_vector_set_scalar_f32(self.buf.as_mut_ptr(), self.dim.flat_len(), c, conn.stream.ptr) };
+      unsafe { devicemem_cuda_vector_set_scalar_f32(self.buf.as_mut_ptr(), self.dim.flat_len(), c, conn.raw_stream().ptr) };
       self.buf.post(&conn);
     } else {
       unimplemented!();

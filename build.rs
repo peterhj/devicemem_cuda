@@ -9,8 +9,11 @@ fn main() {
     // FIXME(20151207): for working w/ K80.
     //.flag("-arch=sm_37")
     .flag("-arch=sm_52")
-    .flag("-Xcompiler")
-    .flag("\'-fPIC\'")
+    /*.flag("-Xcompiler")
+    .flag("\'-fPIC\'")*/
+    .flag("-prec-div=true")
+    .flag("-prec-sqrt=true")
+    .pic(true)
     .include("/usr/local/cuda/include")
     .file("kernels/vector_kernels.cu")
     .compile("libdevicemem_cuda_kernels.a");
