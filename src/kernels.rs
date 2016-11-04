@@ -4,6 +4,12 @@ use libc::*;
 
 #[link(name = "devicemem_cuda_kernels", kind = "static")]
 extern "C" {
+  pub fn devicemem_cuda_cast_u8_to_f32(
+      x: *const u8,
+      dim: size_t,
+      y: *mut f32,
+      stream: cudaStream_t);
+
   pub fn devicemem_cuda_vector_set_scalar_f32(dst: *mut f32, dim: size_t, c: f32, stream: cudaStream_t);
   pub fn devicemem_cuda_vector_add_scalar_f32(dst: *mut f32, dim: size_t, c: f32, stream: cudaStream_t);
   pub fn devicemem_cuda_vector_scale_f32(dst: *mut f32, dim: size_t, alpha: f32, stream: cudaStream_t);
