@@ -14,7 +14,7 @@ use kernels::*;
 
 use cuda::runtime::*;
 use cuda_blas::{CublasHandle};
-use cuda_dnn::v4::{CudnnHandle};
+use cuda_dnn::v5::{CudnnHandle};
 use densearray::prelude::*;
 
 use std::cell::{RefCell};
@@ -271,8 +271,10 @@ impl<T> DeviceMem<T> where T: Copy {
 #[derive(Clone)]
 pub struct DeviceMemRef<'a, T> where T: 'a + Copy {
   mem:      &'a DeviceMem<T>,
+  //mem:      &'a *const T,
   offset:   usize,
   len:      usize,
+  //tracker:  Rc<RefCell<DeviceMemDependencyTracker>>,
 }
 
 impl<'a, T> DeviceMemRef<'a, T> where T: 'a + Copy {
@@ -580,6 +582,20 @@ impl<'a, T> ReshapeMut<'a, (usize, usize), DeviceArray2dViewMut<'a, T>> for Devi
       dim:      dim,
       stride:   dim.least_stride(),
     }
+  }
+}
+
+impl<'a> CastBytes<'a, DeviceMemRef<'a, f32>> for DeviceMemRef<'a, u8> {
+  fn cast_bytes(self) -> DeviceMemRef<'a, f32> {
+    // FIXME(20161103)
+    unimplemented!();
+  }
+}
+
+impl<'a> CastBytesMut<'a, DeviceMemRefMut<'a, f32>> for DeviceMemRefMut<'a, u8> {
+  fn cast_bytes_mut(self) -> DeviceMemRefMut<'a, f32> {
+    // FIXME(20161103)
+    unimplemented!();
   }
 }
 
