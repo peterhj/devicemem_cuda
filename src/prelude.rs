@@ -1,4 +1,5 @@
 pub use super::{
+  AsyncSetConstant,
   DeviceStream, DeviceConn,
   DeviceMem, DeviceMemRef, DeviceMemRefMut,
   DeviceArray1d, DeviceArray1dView, DeviceArray1dViewMut,

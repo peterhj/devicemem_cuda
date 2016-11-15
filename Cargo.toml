@@ -16,8 +16,9 @@ path = "test.rs"
 gcc = "*"
 
 [dependencies]
-libc = "*"
-cuda = { path = "../libcuda" }
-cuda_blas = { path = "../libcuda_blas" }
-cuda_dnn = { path = "../libcuda_dnn" }
-densearray = { path = "../libdensearray" }
+libc = "^0.2"
+cuda = "^0.1"
+cuda_blas = "^0.1"
+cuda_dnn = "^0.1"
+#densearray = { path = "../libdensearray" }
+densearray = "^0.1"

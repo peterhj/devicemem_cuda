@@ -1,6 +1,7 @@
 #![feature(optin_builtin_traits)]
 #![feature(arc_counts)]
 #![feature(rc_counts)]
+#![feature(specialization)]
 //#![feature(zero_one)]
 
 extern crate cuda;
@@ -407,6 +408,10 @@ impl<'a> AliasBytesMut<'a, DeviceMemRefMut<'a, u8>> for DeviceMemRefMut<'a, f32>
   }
 }
 
+pub trait AsyncSetConstant<T> {
+  fn set_constant(&mut self, c: T, conn: DeviceConn);
+}
+
 pub struct DeviceMem<T> where T: Copy {
   dev_idx:  usize,
   dptr:     *mut T,
@@ -620,13 +625,23 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
   }
 }
 
-impl<'a> DeviceMemRefMut<'a, f32> {
-  pub fn set_constant(&mut self, c: f32, conn: DeviceConn) {
+impl<'a> AsyncSetConstant<u8> for DeviceMemRefMut<'a, u8> {
+  fn set_constant(&mut self, c: u8, conn: DeviceConn) {
+    self.wait(&conn);
+    unsafe { cuda_memset_async(self.as_mut_ptr(), c as i32, self.len(), &conn.raw_stream()) }.unwrap();
+    self.post(&conn);
+  }
+}
+
+impl<'a> AsyncSetConstant<f32> for DeviceMemRefMut<'a, f32> {
+  fn set_constant(&mut self, c: f32, conn: DeviceConn) {
     self.wait(&conn);
     unsafe { devicemem_cuda_vector_set_scalar_f32(self.as_mut_ptr(), self.len(), c, conn.raw_stream().ptr) };
     self.post(&conn);
   }
+}
 
+impl<'a> DeviceMemRefMut<'a, f32> {
   pub fn cast_from(self, src: DeviceMemRef<'a, u8>, conn: DeviceConn) {
     assert_eq!(src.len(), self.len());
     src.wait(&conn);
@@ -858,8 +873,8 @@ impl<'a, T> ReshapeMut<'a, (usize, usize), DeviceArray2dViewMut<'a, T>> for Devi
   }
 }
 
-impl<'a> DeviceArray1dViewMut<'a, u8> {
-  pub fn set_constant(&mut self, c: u8, conn: DeviceConn) {
+impl<'a> AsyncSetConstant<u8> for DeviceArray1dViewMut<'a, u8> {
+  fn set_constant(&mut self, c: u8, conn: DeviceConn) {
     if self.stride == 1 {
       self.buf.wait(&conn);
       unsafe { cuda_memset_async(self.buf.as_mut_ptr(), 0, self.buf.size_bytes(), &*conn.raw_stream()) }.unwrap();
@@ -870,8 +885,8 @@ impl<'a> DeviceArray1dViewMut<'a, u8> {
   }
 }
 
-impl<'a> DeviceArray1dViewMut<'a, f32> {
-  pub fn set_constant(&mut self, c: f32, conn: DeviceConn) {
+impl<'a> AsyncSetConstant<f32> for DeviceArray1dViewMut<'a, f32> {
+  fn set_constant(&mut self, c: f32, conn: DeviceConn) {
     if self.stride == 1 {
       self.buf.wait(&conn);
       unsafe { devicemem_cuda_vector_set_scalar_f32(self.buf.as_mut_ptr(), self.dim(), c, conn.raw_stream().ptr) };
