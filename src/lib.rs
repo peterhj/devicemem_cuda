@@ -135,6 +135,11 @@ impl DeviceConn {
   }
 }
 
+pub trait DeviceDependencyTracker {
+  fn post(&self, conn: &DeviceConn);
+  fn wait(&self, conn: &DeviceConn);
+}
+
 pub struct DeviceMemDependencyTracker {
   events:   Vec<(Arc<CudaStream>, Rc<CudaEvent>)>,
   posts:    Vec<Rc<CudaEvent>>,
@@ -412,19 +417,79 @@ pub trait AsyncSetConstant<T> {
   fn set_constant(&mut self, c: T, conn: DeviceConn);
 }
 
-pub struct DeviceMem<T> where T: Copy {
-  dev_idx:  usize,
-  dptr:     *mut T,
-  len:      usize,
-  tracker:  Rc<RefCell<DeviceMemDependencyTracker>>,
-}
-
 pub trait ZeroBits: Copy {}
 
 impl ZeroBits for f32 {}
 impl ZeroBits for f64 {}
 impl ZeroBits for u8 {}
 impl ZeroBits for u32 {}
+
+pub struct SharedDeviceMem<T> where T: Copy {
+  dev_idx:  usize,
+  dptr:     *mut T,
+  len:      usize,
+  //tracker:  Arc<DeviceDependencyTracker>,
+}
+
+impl<T> SharedDeviceMem<T> where T: ZeroBits {
+  pub fn zeros(len: usize, conn: DeviceConn) -> SharedDeviceMem<T> {
+    let mut buf = unsafe { SharedDeviceMem::alloc(len, conn.clone()) };
+    unsafe { cuda_memset_async(buf.dptr as *mut u8, 0, buf.size_bytes(), &*conn.raw_stream()) }.unwrap();
+    //buf.tracker.lock().unwrap().post(&conn);
+    //buf.tracker.post(&conn);
+    buf
+  }
+}
+
+impl<T> SharedDeviceMem<T> where T: Copy {
+  pub unsafe fn alloc(len: usize, conn: DeviceConn) -> SharedDeviceMem<T> {
+    unimplemented!();
+    /*let dptr = match cuda_alloc_device(len) {
+      Err(_) => panic!("DeviceMem allocation failed"),
+      Ok(dptr) => dptr,
+    };*/
+    /*SharedDeviceMem{
+      dev_idx:  conn.device(),
+      dptr:     dptr,
+      len:      len,
+      //tracker:  Rc::new(RefCell::new(DeviceMemDependencyTracker::new())),
+    }*/
+  }
+
+  pub fn as_ptr(&self) -> *const T {
+    self.dptr
+  }
+
+  pub fn as_mut_ptr(&self) -> *mut T {
+    self.dptr
+  }
+
+  pub fn len(&self) -> usize {
+    self.len
+  }
+
+  pub fn size_bytes(&self) -> usize {
+    self.len * size_of::<T>()
+  }
+
+  /*pub fn as_ref<'a>(&'a self) -> NewDeviceMemRef<'a, T> {
+    NewDeviceMemRef{
+      mem_dptr: self.dptr,
+      offset:   0,
+      len:      self.len,
+      //tracker:  self.tracker.clone(),
+      //tracker:  Rc::new(self.tracker.clone()),
+      _marker:  PhantomData,
+    }
+  }*/
+}
+
+pub struct DeviceMem<T> where T: Copy {
+  dev_idx:  usize,
+  dptr:     *mut T,
+  len:      usize,
+  tracker:  Rc<RefCell<DeviceMemDependencyTracker>>,
+}
 
 impl<T> DeviceMem<T> where T: ZeroBits {
   pub fn zeros(len: usize, conn: DeviceConn) -> DeviceMem<T> {
@@ -442,7 +507,7 @@ impl<T> DeviceMem<T> where T: Copy {
       Ok(dptr) => dptr,
     };
     DeviceMem{
-      dev_idx:  conn.dev_idx,
+      dev_idx:  conn.device(),
       dptr:     dptr,
       len:      len,
       tracker:  Rc::new(RefCell::new(DeviceMemDependencyTracker::new())),
@@ -487,6 +552,15 @@ impl<T> DeviceMem<T> where T: Copy {
       _marker:  PhantomData,
     }
   }
+}
+
+#[derive(Clone)]
+pub struct NewDeviceMemRef<'a, T> where T: 'a + Copy {
+  mem_dptr: *mut T,
+  offset:   usize,
+  len:      usize,
+  tracker:  Rc<DeviceDependencyTracker + 'static>,
+  _marker:  PhantomData<&'a ()>,
 }
 
 #[derive(Clone)]
