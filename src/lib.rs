@@ -8,6 +8,8 @@ extern crate cuda;
 extern crate cuda_blas;
 extern crate cuda_dnn;
 extern crate densearray;
+extern crate nccl;
+//extern crate sharedmem;
 
 extern crate libc;
 
@@ -355,6 +357,7 @@ impl<'a> AliasBytes<'a, DeviceMemRef<'a, f32>> for DeviceMemRef<'a, u8> {
     let alias_len = self.len / size_of::<f32>();
     assert_eq!(0, self.len % size_of::<f32>());
     DeviceMemRef{
+      dev_idx:  self.dev_idx,
       mem_dptr: self.mem_dptr as *mut _,
       offset:   alias_offset,
       len:      alias_len,
@@ -373,6 +376,7 @@ impl<'a> AliasBytesMut<'a, DeviceMemRefMut<'a, f32>> for DeviceMemRefMut<'a, u8>
     let alias_len = self.len / size_of::<f32>();
     assert_eq!(0, self.len % size_of::<f32>());
     DeviceMemRefMut{
+      dev_idx:  self.dev_idx,
       mem_dptr: self.mem_dptr as *mut _,
       offset:   alias_offset,
       len:      alias_len,
@@ -389,6 +393,7 @@ impl<'a> AliasBytes<'a, DeviceMemRef<'a, u8>> for DeviceMemRef<'a, f32> {
     let orig_len = self.len;
     let alias_len = self.len * size_of::<f32>();
     DeviceMemRef{
+      dev_idx:  self.dev_idx,
       mem_dptr: self.mem_dptr as *mut _,
       offset:   alias_offset,
       len:      alias_len,
@@ -405,6 +410,7 @@ impl<'a> AliasBytesMut<'a, DeviceMemRefMut<'a, u8>> for DeviceMemRefMut<'a, f32>
     let orig_len = self.len;
     let alias_len = self.len * size_of::<f32>();
     DeviceMemRefMut{
+      dev_idx:  self.dev_idx,
       mem_dptr: self.mem_dptr as *mut _,
       offset:   alias_offset,
       len:      alias_len,
@@ -678,6 +684,7 @@ impl<'a, T> DeviceMemRef<'a, T> where T: 'a + Copy {
     let new_len = end - start;
     assert!(new_len <= self.len);
     DeviceMemRef{
+      dev_idx:  self.dev_idx,
       mem_dptr: self.mem_dptr,
       offset:   self.offset + start,
       len:      new_len,
@@ -741,6 +748,7 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
 
   pub fn as_ref(self) -> DeviceMemRef<'a, T> {
     DeviceMemRef{
+      dev_idx:  self.dev_idx,
       mem_dptr: self.mem_dptr,
       offset:   self.offset,
       len:      self.len,
@@ -753,6 +761,7 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
     let new_len = end - start;
     assert!(new_len <= self.len);
     DeviceMemRefMut{
+      dev_idx:  self.dev_idx,
       mem_dptr: self.mem_dptr,
       offset:   self.offset + start,
       len:      new_len,
@@ -779,7 +788,6 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
           self.as_mut_ptr(), self.dev_idx,
           src.as_ptr(), src.dev_idx,
           self.len(),
-          CudaMemcpyKind::DeviceToDevice,
           &conn.raw_stream(),
       ) };
       assert!(status.is_ok());

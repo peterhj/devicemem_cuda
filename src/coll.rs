@@ -1,12 +1,53 @@
 use super::*;
 
-use sharedmem::sync::{SpinBarrier};
+use nccl::*;
+//use sharedmem::sync::{SpinBarrier};
 
-use std::cmp::{min};
-use std::sync::{Arc, Mutex};
+//use std::cmp::{min};
+//use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
-pub struct DeviceRingAllreduceBuilder<T> where T: Copy {
+pub struct DeviceNcclBuilder {
+  num_workers:  usize,
+  comm_id:      NcclUniqueId,
+}
+
+impl DeviceNcclBuilder {
+  pub fn new(num_workers: usize) -> Self {
+    let comm_id = NcclUniqueId::create().unwrap();
+    DeviceNcclBuilder{
+      num_workers:  num_workers,
+      comm_id:      comm_id,
+    }
+  }
+
+  pub fn into_worker(self, worker_rank: usize) -> DeviceNcclWorker {
+    let comm = NcclComm::create(worker_rank, self.num_workers, self.comm_id.clone()).unwrap();
+    DeviceNcclWorker{
+      worker_rank:  worker_rank,
+      num_workers:  self.num_workers,
+      comm_id:      self.comm_id,
+      comm:         comm,
+    }
+  }
+}
+
+pub struct DeviceNcclWorker {
+  worker_rank:  usize,
+  num_workers:  usize,
+  comm_id:      NcclUniqueId,
+  comm:         NcclComm,
+}
+
+impl DeviceNcclWorker {
+  pub fn allreduce_sum<T>(&self, mut buf: DeviceMemRefMut<T>, conn: DeviceConn) where T: NcclDataType + Copy {
+    let res = unsafe { self.comm.allreduce(buf.as_ptr(), buf.as_mut_ptr(), buf.len(), NcclSumOp, conn.raw_stream().ptr) };
+    assert!(res.is_ok());
+  }
+}
+
+/*#[derive(Clone)]
+pub struct DeviceBufRingAllreduceBuilder<T> where T: Copy {
   num_workers:  usize,
   buf_sz:       usize,
   part_sizes:   Vec<usize>,
@@ -16,7 +57,7 @@ pub struct DeviceRingAllreduceBuilder<T> where T: Copy {
   tmp_bufs:     Arc<Mutex<Vec<Option<Arc<SharedDeviceMem<T>>>>>>,
 }
 
-impl<T> DeviceRingAllreduceBuilder<T> where T: ZeroBits {
+impl<T> DeviceBufRingAllreduceBuilder<T> where T: ZeroBits {
   pub fn new(num_workers: usize, buf_sz: usize) -> Self {
     let mut part_sizes = Vec::with_capacity(num_workers);
     let mut part_offsets = Vec::with_capacity(num_workers);
@@ -36,7 +77,7 @@ impl<T> DeviceRingAllreduceBuilder<T> where T: ZeroBits {
       work_bufs.push(None);
       tmp_bufs.push(None);
     }
-    DeviceRingAllreduceBuilder{
+    DeviceBufRingAllreduceBuilder{
       num_workers:  num_workers,
       buf_sz:       buf_sz,
       part_sizes:   part_sizes,
@@ -47,12 +88,12 @@ impl<T> DeviceRingAllreduceBuilder<T> where T: ZeroBits {
     }
   }
 
-  pub fn into(self, worker_rank: usize, stream: DeviceStream) -> DeviceRingAllreduce<T> {
+  pub fn into_worker(self, worker_rank: usize, stream: DeviceStream) -> DeviceBufRingAllreduceWorker<T> {
     {
       let mut work_bufs = self.work_bufs.lock().unwrap();
       let mut tmp_bufs = self.work_bufs.lock().unwrap();
-      work_bufs[worker_rank] = Some(Arc::new(SharedDeviceMem::zeros(self.buf_sz)));
-      tmp_bufs[worker_rank] = Some(Arc::new(SharedDeviceMem::zeros(self.buf_sz)));
+      work_bufs[worker_rank] = Some(Arc::new(SharedDeviceMem::zeros(self.buf_sz, stream.conn())));
+      tmp_bufs[worker_rank] = Some(Arc::new(SharedDeviceMem::zeros(self.buf_sz, stream.conn())));
     }
     self.barrier.wait();
     let mut local_work_bufs = Vec::with_capacity(self.num_workers);
@@ -65,7 +106,7 @@ impl<T> DeviceRingAllreduceBuilder<T> where T: ZeroBits {
         local_tmp_bufs.push(tmp_bufs[r].as_ref().unwrap().clone());
       }
     }
-    DeviceRingAllreduce{
+    DeviceBufRingAllreduceWorker{
       num_workers:  self.num_workers,
       buf_sz:       self.buf_sz,
       part_sizes:   self.part_sizes,
@@ -78,7 +119,7 @@ impl<T> DeviceRingAllreduceBuilder<T> where T: ZeroBits {
   }
 }
 
-pub struct DeviceRingAllreduce<T> where T: Copy {
+pub struct DeviceBufRingAllreduceWorker<T> where T: Copy {
   num_workers:  usize,
   buf_sz:       usize,
   part_sizes:   Vec<usize>,
@@ -89,8 +130,8 @@ pub struct DeviceRingAllreduce<T> where T: Copy {
   tmp_bufs:     Vec<Arc<SharedDeviceMem<T>>>,
 }
 
-impl DeviceRingAllreduce<f32> {
-  pub fn allreduce(&self, mut buf: DeviceMemRefMut<T>, stream: DeviceStream) {
+impl DeviceBufRingAllreduceWorker<f32> {
+  pub fn allreduce(&self, mut buf: DeviceMemRefMut<f32>, stream: DeviceStream) {
     let rank = self.worker_rank;
 
     self.work_bufs[rank].as_mut().copy(buf.clone().as_ref(), stream.conn());
@@ -105,9 +146,9 @@ impl DeviceRingAllreduce<f32> {
       let part_size = self.part_sizes[part_rank];
       let part_offset = self.part_offsets[part_rank];
       self.tmp_bufs[rank].as_mut().slice_mut(part_offset, part_offset + part_size)
-        .copy(self.work_bufs[src_rank].as_ref().slice(part_offset, part_offset + part_size), stream.conn());
+        .copy((*self.work_bufs[src_rank]).as_ref().slice(part_offset, part_offset + part_size), stream.conn());
       self.work_bufs[rank].as_mut().slice_mut(part_offset, part_offset + part_size)
-        .add(self.tmp_bufs[rank].as_ref().slice(part_offset, part_offset + part_size), stream.conn());
+        .add((*self.tmp_bufs[rank]).as_ref().slice(part_offset, part_offset + part_size), stream.conn());
       self.work_bufs[rank].as_ref().wait(&stream.conn());
       stream.conn().sync();
       self.barrier.wait();
@@ -124,4 +165,4 @@ impl DeviceRingAllreduce<f32> {
 
     buf.as_mut().copy(self.work_bufs[rank].as_ref(), stream.conn());
   }
-}
+}*/
