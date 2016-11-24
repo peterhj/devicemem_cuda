@@ -26,6 +26,7 @@ use std::ops::{Deref, DerefMut};
 use std::rc::{Rc};
 use std::sync::{Arc, Mutex};
 
+pub mod coll;
 pub mod kernels;
 pub mod linalg;
 pub mod prelude;
@@ -422,13 +423,19 @@ pub trait ZeroBits: Copy {}
 impl ZeroBits for f32 {}
 impl ZeroBits for f64 {}
 impl ZeroBits for u8 {}
+impl ZeroBits for u16 {}
 impl ZeroBits for u32 {}
+impl ZeroBits for u64 {}
+impl ZeroBits for i8 {}
+impl ZeroBits for i16 {}
+impl ZeroBits for i32 {}
+impl ZeroBits for i64 {}
 
 pub struct SharedDeviceMem<T> where T: Copy {
   dev_idx:  usize,
   dptr:     *mut T,
   len:      usize,
-  //tracker:  Arc<DeviceDependencyTracker>,
+  //tracker:  Arc<Mutex<DeviceMemDependencyTracker>,
 }
 
 impl<T> SharedDeviceMem<T> where T: ZeroBits {
@@ -437,23 +444,23 @@ impl<T> SharedDeviceMem<T> where T: ZeroBits {
     unsafe { cuda_memset_async(buf.dptr as *mut u8, 0, buf.size_bytes(), &*conn.raw_stream()) }.unwrap();
     //buf.tracker.lock().unwrap().post(&conn);
     //buf.tracker.post(&conn);
+    conn.sync();
     buf
   }
 }
 
 impl<T> SharedDeviceMem<T> where T: Copy {
   pub unsafe fn alloc(len: usize, conn: DeviceConn) -> SharedDeviceMem<T> {
-    unimplemented!();
-    /*let dptr = match cuda_alloc_device(len) {
+    let dptr = match cuda_alloc_device(len) {
       Err(_) => panic!("DeviceMem allocation failed"),
       Ok(dptr) => dptr,
-    };*/
-    /*SharedDeviceMem{
+    };
+    SharedDeviceMem{
       dev_idx:  conn.device(),
       dptr:     dptr,
       len:      len,
       //tracker:  Rc::new(RefCell::new(DeviceMemDependencyTracker::new())),
-    }*/
+    }
   }
 
   pub fn as_ptr(&self) -> *const T {
@@ -472,6 +479,23 @@ impl<T> SharedDeviceMem<T> where T: Copy {
     self.len * size_of::<T>()
   }
 
+  pub fn as_ref_shared<'a>(&'a self) -> SharedDeviceMemRef<'a, T> {
+    SharedDeviceMemRef{
+      mem_dptr: self.dptr,
+      offset:   0,
+      len:      self.len,
+      _marker:  PhantomData,
+    }
+  }
+
+  pub fn as_ref<'a>(&'a self) -> DeviceMemRef<'a, T> {
+    unimplemented!();
+  }
+
+  pub fn as_mut<'a>(&'a self) -> DeviceMemRefMut<'a, T> {
+    unimplemented!();
+  }
+
   /*pub fn as_ref<'a>(&'a self) -> NewDeviceMemRef<'a, T> {
     NewDeviceMemRef{
       mem_dptr: self.dptr,
@@ -482,6 +506,59 @@ impl<T> SharedDeviceMem<T> where T: Copy {
       _marker:  PhantomData,
     }
   }*/
+}
+
+#[derive(Clone)]
+pub struct SharedDeviceMemRef<'a, T> where T: 'a + Copy {
+  //mem:      &'a DeviceMem<T>,
+  mem_dptr: *mut T,
+  offset:   usize,
+  len:      usize,
+  //tracker:  Rc<RefCell<DeviceMemDependencyTracker>>,
+  _marker:  PhantomData<&'a ()>,
+}
+
+impl<'a, T> SharedDeviceMemRef<'a, T> where T: 'a + Copy {
+  pub fn as_ptr(&self) -> *const T {
+    unsafe { self.mem_dptr.offset(self.offset as isize) }
+  }
+
+  pub fn as_mut_ptr(&self) -> *mut T {
+    unsafe { self.mem_dptr.offset(self.offset as isize) }
+  }
+
+  pub fn len(&self) -> usize {
+    self.len
+  }
+
+  pub fn size_bytes(&self) -> usize {
+    self.len * size_of::<T>()
+  }
+
+  pub fn slice(self, start: usize, end: usize) -> SharedDeviceMemRef<'a, T> {
+    let new_len = end - start;
+    assert!(new_len <= self.len);
+    SharedDeviceMemRef{
+      mem_dptr: self.mem_dptr,
+      offset:   self.offset + start,
+      len:      new_len,
+      //tracker:  self.tracker,
+      _marker:  PhantomData,
+    }
+  }
+
+  pub fn copy_sync(&mut self, src: DeviceMemRef<'a, T>, conn: DeviceConn) {
+    assert_eq!(self.len(), src.len());
+    src.wait(&conn);
+    let status = unsafe { cuda_memcpy_async(
+        self.as_mut_ptr(),
+        src.as_ptr(),
+        self.len(),
+        CudaMemcpyKind::DeviceToDevice,
+        &conn.raw_stream(),
+    ) };
+    src.post(&conn);
+  }
 }
 
 pub struct DeviceMem<T> where T: Copy {
@@ -533,6 +610,7 @@ impl<T> DeviceMem<T> where T: Copy {
   pub fn as_ref<'a>(&'a self) -> DeviceMemRef<'a, T> {
     DeviceMemRef{
       //mem:      self,
+      dev_idx:  self.dev_idx,
       mem_dptr: self.dptr,
       offset:   0,
       len:      self.len,
@@ -545,6 +623,7 @@ impl<T> DeviceMem<T> where T: Copy {
     let len = self.len;
     DeviceMemRefMut{
       //mem:      self,
+      dev_idx:  self.dev_idx,
       mem_dptr: self.dptr,
       offset:   0,
       len:      len,
@@ -566,6 +645,7 @@ pub struct NewDeviceMemRef<'a, T> where T: 'a + Copy {
 #[derive(Clone)]
 pub struct DeviceMemRef<'a, T> where T: 'a + Copy {
   //mem:      &'a DeviceMem<T>,
+  dev_idx:  usize,
   mem_dptr: *mut T,
   offset:   usize,
   len:      usize,
@@ -623,8 +703,10 @@ impl<'a, T> DeviceMemRef<'a, T> where T: 'a + Copy {
   }
 }
 
+#[derive(Clone)]
 pub struct DeviceMemRefMut<'a, T> where T: 'a + Copy {
   //mem:      &'a mut DeviceMem<T>,
+  dev_idx:  usize,
   mem_dptr: *mut T,
   offset:   usize,
   len:      usize,
@@ -657,6 +739,16 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
     self.tracker.borrow_mut().wait(conn);
   }
 
+  pub fn as_ref(self) -> DeviceMemRef<'a, T> {
+    DeviceMemRef{
+      mem_dptr: self.mem_dptr,
+      offset:   self.offset,
+      len:      self.len,
+      tracker:  self.tracker,
+      _marker:  PhantomData,
+    }
+  }
+
   pub fn slice_mut(self, start: usize, end: usize) -> DeviceMemRefMut<'a, T> {
     let new_len = end - start;
     assert!(new_len <= self.len);
@@ -670,6 +762,33 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
   }
 
   pub fn copy(&mut self, src: DeviceMemRef<'a, T>, conn: DeviceConn) {
+    assert_eq!(self.len(), src.len());
+    src.wait(&conn);
+    self.wait(&conn);
+    if self.dev_idx == src.dev_idx {
+      let status = unsafe { cuda_memcpy_async(
+          self.as_mut_ptr(),
+          src.as_ptr(),
+          self.len(),
+          CudaMemcpyKind::DeviceToDevice,
+          &conn.raw_stream(),
+      ) };
+      assert!(status.is_ok());
+    } else {
+      let status = unsafe { cuda_memcpy_peer_async(
+          self.as_mut_ptr(), self.dev_idx,
+          src.as_ptr(), src.dev_idx,
+          self.len(),
+          CudaMemcpyKind::DeviceToDevice,
+          &conn.raw_stream(),
+      ) };
+      assert!(status.is_ok());
+    }
+    src.post(&conn);
+    self.post(&conn);
+  }
+
+  pub fn copy_unsync(&mut self, src: SharedDeviceMemRef<'a, T>, conn: DeviceConn) {
     assert_eq!(self.len(), src.len());
     self.wait(&conn);
     let status = unsafe { cuda_memcpy_async(
@@ -726,8 +845,8 @@ impl<'a> DeviceMemRefMut<'a, f32> {
         self.as_mut_ptr(),
         conn.raw_stream().ptr,
     ) };
-    src.wait(&conn);
-    self.wait(&conn);
+    src.post(&conn);
+    self.post(&conn);
   }
 }
 
@@ -878,6 +997,7 @@ impl<'a, T> DeviceArray1dViewMut<'a, T> where T: 'a + Copy {
   pub fn copy(&mut self, src: DeviceArray1dView<'a, T>, conn: DeviceConn) {
     assert_eq!(self.dim(), src.dim());
     if self.stride() == self.dim().least_stride() && self.stride() == src.stride() {
+      src.wait(&conn);
       self.wait(&conn);
       let status = unsafe { cuda_memcpy_async(
           self.as_mut_ptr(),
@@ -886,6 +1006,7 @@ impl<'a, T> DeviceArray1dViewMut<'a, T> where T: 'a + Copy {
           CudaMemcpyKind::DeviceToDevice,
           &conn.raw_stream(),
       ) };
+      src.post(&conn);
       self.post(&conn);
     } else {
       unimplemented!();
@@ -1113,6 +1234,7 @@ impl<'a, T> DeviceArray2dViewMut<'a, T> where T: 'a + Copy {
   pub fn copy(&mut self, src: DeviceArray2dView<'a, T>, conn: DeviceConn) {
     assert_eq!(self.dim(), src.dim());
     if self.stride() == self.dim().least_stride() && self.stride() == src.stride() {
+      src.wait(&conn);
       self.wait(&conn);
       let status = unsafe { cuda_memcpy_async(
           self.as_mut_ptr(),
@@ -1121,6 +1243,7 @@ impl<'a, T> DeviceArray2dViewMut<'a, T> where T: 'a + Copy {
           CudaMemcpyKind::DeviceToDevice,
           &conn.raw_stream(),
       ) };
+      src.post(&conn);
       self.post(&conn);
     } else {
       unimplemented!();
@@ -1314,6 +1437,7 @@ impl<'a, T> DeviceArray4dViewMut<'a, T> where T: 'a + Copy {
   pub fn copy(&mut self, src: DeviceArray4dView<'a, T>, conn: DeviceConn) {
     assert_eq!(self.dim(), src.dim());
     if self.stride() == self.dim().least_stride() && self.stride() == src.stride() {
+      src.wait(&conn);
       self.wait(&conn);
       let status = unsafe { cuda_memcpy_async(
           self.as_mut_ptr(),
@@ -1322,6 +1446,7 @@ impl<'a, T> DeviceArray4dViewMut<'a, T> where T: 'a + Copy {
           CudaMemcpyKind::DeviceToDevice,
           &conn.raw_stream(),
       ) };
+      src.post(&conn);
       self.post(&conn);
     } else {
       unimplemented!();
