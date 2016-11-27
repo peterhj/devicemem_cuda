@@ -1,48 +1,71 @@
 use super::*;
 
 use nccl::*;
-//use sharedmem::sync::{SpinBarrier};
+use sharedmem::sync::{SpinBarrier};
 
 //use std::cmp::{min};
-//use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 
 #[derive(Clone)]
-pub struct DeviceNcclBuilder {
+pub struct DeviceNcclCommBuilder {
   num_workers:  usize,
+  barrier:      Arc<SpinBarrier>,
   comm_id:      NcclUniqueId,
 }
 
-impl DeviceNcclBuilder {
+impl DeviceNcclCommBuilder {
   pub fn new(num_workers: usize) -> Self {
     let comm_id = NcclUniqueId::create().unwrap();
-    DeviceNcclBuilder{
+    DeviceNcclCommBuilder{
       num_workers:  num_workers,
+      barrier:      Arc::new(SpinBarrier::new(num_workers)),
       comm_id:      comm_id,
     }
   }
 
-  pub fn into_worker(self, worker_rank: usize) -> DeviceNcclWorker {
+  pub fn into_worker(self, worker_rank: usize) -> DeviceNcclCommWorker {
     let comm = NcclComm::create(worker_rank, self.num_workers, self.comm_id.clone()).unwrap();
-    DeviceNcclWorker{
+    DeviceNcclCommWorker{
       worker_rank:  worker_rank,
       num_workers:  self.num_workers,
+      barrier:      self.barrier,
       comm_id:      self.comm_id,
       comm:         comm,
     }
   }
 }
 
-pub struct DeviceNcclWorker {
+pub struct DeviceNcclCommWorker {
   worker_rank:  usize,
   num_workers:  usize,
+  barrier:      Arc<SpinBarrier>,
   comm_id:      NcclUniqueId,
   comm:         NcclComm,
 }
 
-impl DeviceNcclWorker {
+impl DeviceNcclCommWorker {
+  pub fn broadcast<T>(&self, mut buf: DeviceMemRefMut<T>, root: usize, conn: DeviceConn) where T: NcclDataType + Copy {
+    buf.wait(&conn);
+    conn.sync();
+    self.barrier.wait();
+    let res = unsafe { self.comm.broadcast(buf.as_mut_ptr(), buf.len(), root, conn.raw_stream().ptr) };
+    assert!(res.is_ok());
+    buf.post(&conn);
+    buf.wait(&conn);
+    conn.sync();
+    self.barrier.wait();
+  }
+
   pub fn allreduce_sum<T>(&self, mut buf: DeviceMemRefMut<T>, conn: DeviceConn) where T: NcclDataType + Copy {
+    buf.wait(&conn);
+    conn.sync();
+    self.barrier.wait();
     let res = unsafe { self.comm.allreduce(buf.as_ptr(), buf.as_mut_ptr(), buf.len(), NcclSumOp, conn.raw_stream().ptr) };
     assert!(res.is_ok());
+    buf.post(&conn);
+    buf.wait(&conn);
+    conn.sync();
+    self.barrier.wait();
   }
 }
 

@@ -9,7 +9,7 @@ extern crate cuda_blas;
 extern crate cuda_dnn;
 extern crate densearray;
 extern crate nccl;
-//extern crate sharedmem;
+extern crate sharedmem;
 
 extern crate libc;
 

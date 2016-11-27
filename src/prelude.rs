@@ -1,4 +1,5 @@
 pub use super::{
+  ZeroBits,
   AsyncSetConstant,
   DeviceStream, DeviceConn,
   DeviceMem, DeviceMemRef, DeviceMemRefMut,
