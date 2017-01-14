@@ -204,6 +204,20 @@ impl DeviceMemDependencyTracker {
       conn.raw_stream().wait_event(&post).unwrap();
     }
   }
+
+  pub fn sync(&mut self) {
+    let posts_count = self.posts.len();
+    if posts_count > 1 {
+      panic!("WARNING: DeviceMemDependencyTracker::wait(): {} events have been posted! This is likely a bug.", posts_count);
+    }
+    let events_count = self.events.len();
+    if events_count >= 100 {
+      panic!("WARNING: DeviceMemDependencyTracker::wait(): {} events have been registered! This is likely a bug.", events_count);
+    }
+    for post in self.posts.drain( .. ) {
+      post.synchronize().unwrap();
+    }
+  }
 }
 
 impl<'a, T> AsView<'a, DeviceArray1dView<'a, T>> for DeviceArray1d<T> where T: Copy {
@@ -286,6 +300,13 @@ impl<'a, T> Reshape<'a, usize, DeviceArray1dView<'a, T>> for DeviceArray2dView<'
   }
 }
 
+impl<'a, T> FlattenMut<'a, DeviceArray1dViewMut<'a, T>> for DeviceArray2dViewMut<'a, T> where T: Copy {
+  fn flatten_mut(self) -> DeviceArray1dViewMut<'a, T> {
+    let len = self.dim.flat_len();
+    self.reshape_mut(len)
+  }
+}
+
 impl<'a, T> ReshapeMut<'a, usize, DeviceArray1dViewMut<'a, T>> for DeviceArray2dViewMut<'a, T> where T: Copy {
   fn reshape_mut(self, dim: usize) -> DeviceArray1dViewMut<'a, T> {
     // Assume unit stride.
@@ -307,6 +328,13 @@ impl<'a, T> Reshape<'a, usize, DeviceArray1dView<'a, T>> for DeviceArray4dView<'
       dim:      dim,
       stride:   dim.least_stride(),
     }
+  }
+}
+
+impl<'a, T> FlattenMut<'a, DeviceArray1dViewMut<'a, T>> for DeviceArray4dViewMut<'a, T> where T: Copy {
+  fn flatten_mut(self) -> DeviceArray1dViewMut<'a, T> {
+    let len = self.dim.flat_len();
+    self.reshape_mut(len)
   }
 }
 
@@ -424,18 +452,20 @@ pub trait AsyncSetConstant<T> {
   fn set_constant(&mut self, c: T, conn: DeviceConn);
 }
 
-pub trait ZeroBits: Copy {}
+pub trait ZeroBits: Copy {
+  fn zero_bits() -> Self where Self: Sized;
+}
 
-impl ZeroBits for f32 {}
-impl ZeroBits for f64 {}
-impl ZeroBits for u8 {}
-impl ZeroBits for u16 {}
-impl ZeroBits for u32 {}
-impl ZeroBits for u64 {}
-impl ZeroBits for i8 {}
-impl ZeroBits for i16 {}
-impl ZeroBits for i32 {}
-impl ZeroBits for i64 {}
+impl ZeroBits for f32 { fn zero_bits() -> Self { 0.0 } }
+impl ZeroBits for f64 { fn zero_bits() -> Self { 0.0 } }
+impl ZeroBits for u8  { fn zero_bits() -> Self { 0 } }
+impl ZeroBits for u16 { fn zero_bits() -> Self { 0 } }
+impl ZeroBits for u32 { fn zero_bits() -> Self { 0 } }
+impl ZeroBits for u64 { fn zero_bits() -> Self { 0 } }
+impl ZeroBits for i8  { fn zero_bits() -> Self { 0 } }
+impl ZeroBits for i16 { fn zero_bits() -> Self { 0 } }
+impl ZeroBits for i32 { fn zero_bits() -> Self { 0 } }
+impl ZeroBits for i64 { fn zero_bits() -> Self { 0 } }
 
 pub struct SharedDeviceMem<T> where T: Copy {
   dev_idx:  usize,
@@ -567,6 +597,68 @@ impl<'a, T> SharedDeviceMemRef<'a, T> where T: 'a + Copy {
   }
 }
 
+pub struct AsyncMem<T> where T: Copy {
+  buf:      Vec<T>,
+  tracker:  Rc<RefCell<DeviceMemDependencyTracker>>,
+}
+
+/*impl<T> Deref for AsyncMem<T> where T: Copy {
+  type Target = [T];
+
+  fn deref(&self) -> &[T] {
+    self.as_ref()
+  }
+}
+
+impl<T> DerefMut for AsyncMem<T> where T: Copy {
+  fn deref_mut(&mut self) -> &mut [T] {
+    self.as_mut()
+  }
+}*/
+
+impl<T> AsyncMem<T> where T: ZeroBits {
+  pub fn zeros(len: usize) -> AsyncMem<T> {
+    let mut buf = Vec::with_capacity(len);
+    buf.resize(len, T::zero_bits());
+    AsyncMem{
+      buf:      buf,
+      tracker:  Rc::new(RefCell::new(DeviceMemDependencyTracker::new())),
+    }
+  }
+}
+
+impl<T> AsyncMem<T> where T: Copy {
+  pub unsafe fn as_ptr(&self) -> *const T {
+    self.buf.as_ptr()
+  }
+
+  pub fn len(&self) -> usize {
+    self.buf.len()
+  }
+
+  pub fn post(&self, conn: &DeviceConn) {
+    self.tracker.borrow_mut().post(conn);
+  }
+
+  pub fn wait(&self, conn: &DeviceConn) {
+    self.tracker.borrow_mut().wait(conn);
+  }
+
+  pub fn sync(&self) {
+    self.tracker.borrow_mut().sync();
+  }
+
+  pub fn as_ref(&self) -> &[T] {
+    self.sync();
+    &self.buf
+  }
+
+  pub fn as_mut(&mut self) -> &mut [T] {
+    self.sync();
+    &mut self.buf
+  }
+}
+
 pub struct DeviceMem<T> where T: Copy {
   dev_idx:  usize,
   dptr:     *mut T,
@@ -691,6 +783,11 @@ impl<'a, T> DeviceMemRef<'a, T> where T: 'a + Copy {
       tracker:  self.tracker,
       _marker:  PhantomData,
     }
+  }
+
+  pub fn sync(&self, conn: DeviceConn) {
+    self.wait(&conn);
+    conn.sync();
   }
 
   pub fn store_sync(&mut self, output: &mut [T], conn: DeviceConn) {
@@ -823,6 +920,21 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
     self.post(&conn);
     self.wait(&conn);
     conn.sync();
+  }
+
+  pub fn load(&mut self, input: &AsyncMem<T>, conn: DeviceConn) {
+    assert_eq!(self.len(), input.len());
+    input.wait(&conn);
+    self.wait(&conn);
+    let status = unsafe { cuda_memcpy_async(
+        self.as_mut_ptr(),
+        input.as_ptr(),
+        self.len(),
+        CudaMemcpyKind::HostToDevice,
+        &conn.raw_stream(),
+    ) };
+    input.post(&conn);
+    self.post(&conn);
   }
 }
 
