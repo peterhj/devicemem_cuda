@@ -4,6 +4,7 @@
 #![feature(specialization)]
 //#![feature(zero_one)]
 
+extern crate async_execution;
 extern crate cuda;
 extern crate cuda_blas;
 extern crate cuda_dnn;
@@ -15,6 +16,7 @@ extern crate libc;
 
 use kernels::*;
 
+use async_execution::*;
 use cuda::runtime::*;
 use cuda_blas::{CublasHandle};
 use cuda_dnn::v5::{CudnnHandle};
@@ -35,39 +37,19 @@ pub mod prelude;
 //pub mod stats;
 
 thread_local!(static DRIVER_CONTEXT: Rc<DriverContext> = Rc::new(DriverContext{}));
-thread_local!(static EXEC_CTX_STACK: Rc<ExecutionCtxStack> = Rc::new(ExecutionCtxStack::new()));
+thread_local!(static EXEC_CTX_STACK: Rc<ExecCtxStack<DeviceStream>> = Rc::new(ExecCtxStack::new()));
 
 struct DriverContext {}
 
 impl !Send for DriverContext {}
 impl !Sync for DriverContext {}
 
-pub struct ExecutionCtxStack {
-  active:   RefCell<Option<Rc<DeviceStream>>>,
-  //implicit: RefCell<Vec<Rc<DeviceStream>>>,
-}
-
-impl ExecutionCtxStack {
-  pub fn new() -> Self {
-    ExecutionCtxStack{
-      active:   RefCell::new(None),
-    }
-  }
-}
-
-pub trait ExecutionContext {
-  type Guard;
-
-  fn implicit() -> Rc<Self> where Self: Sized;
-  fn push(ctx: Rc<Self>) -> Self::Guard where Self: 'static + Sized;
-}
-
 pub struct DeviceStreamExecCtxGuard;
 
 impl Drop for DeviceStreamExecCtxGuard {
   fn drop(&mut self) {
     EXEC_CTX_STACK.with(|stack| {
-      //*stack.active.borrow_mut() = None;
+      *stack.active.borrow_mut() = None;
       //let _ = stack.implicit.borrow_mut().pop();
     });
   }
@@ -94,9 +76,14 @@ impl ExecutionContext for DeviceStream {
     })
   }
 
+  fn max_depth() -> Option<usize> {
+    Some(1)
+  }
+
   fn push(ctx: Rc<DeviceStream>) -> DeviceStreamExecCtxGuard {
     EXEC_CTX_STACK.with(|stack| {
       //unimplemented!();
+      assert!(stack.active.borrow().is_none());
       *stack.active.borrow_mut() = Some(ctx);
       //stack.implicit.borrow_mut().push();
     });

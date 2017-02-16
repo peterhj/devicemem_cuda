@@ -1,7 +1,7 @@
 pub use super::{
   ZeroBits,
   AsyncSetConstant,
-  ExecutionContext, DeviceStream, DeviceConn,
+  DeviceStream, DeviceConn,
   AsyncMem,
   DeviceMem, DeviceMemRef, DeviceMemRefMut,
   DeviceArray1d, DeviceArray1dView, DeviceArray1dViewMut,

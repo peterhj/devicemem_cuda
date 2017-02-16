@@ -17,6 +17,7 @@ gcc = "*"
 
 [dependencies]
 libc = "^0.2"
+async_execution = { path = "../async_execution" }
 cuda = "^0.1"
 cuda_blas = "^0.1"
 cuda_dnn = "^0.1"
