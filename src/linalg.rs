@@ -6,6 +6,27 @@ use cuda_blas::*;
 use cuda_blas::ffi::*;
 use densearray::linalg::{Transpose};
 
+impl<'a> DeviceMemRefMut<'a, f32> {
+  pub fn inner_prod(&mut self, x: DeviceArray1dView<'a, f32>, y: DeviceArray1dView<'a, f32>, conn: DeviceConn) {
+    assert_eq!(x.dim(), y.dim());
+    let cublas = conn.cublas();
+    cublas.set_pointer_mode(CublasPointerMode::Device).unwrap();
+    let _ = x.buf.track(&conn);
+    let _ = y.buf.track(&conn);
+    let _ = self.track(&conn);
+    let status = unsafe { cublasSdot_v2(
+        cublas.ptr,
+        x.dim() as _,
+        x.as_ptr(),
+        x.stride() as _,
+        y.as_ptr(),
+        y.stride() as _,
+        self.as_mut_ptr(),
+    ) };
+    assert!(status.is_ok());
+  }
+}
+
 impl<'a> DeviceArray1dView<'a, f32> {
   pub fn l2_norm(&self, conn: DeviceConn) -> f32 {
     let cublas = conn.cublas();
@@ -150,6 +171,19 @@ impl<'a> DeviceArray1dViewMut<'a, f32> {
       x.buf.wait(&conn);
       self.buf.wait(&conn);
       unsafe { devicemem_cuda_vector_elemwise_mult_f32(self.as_mut_ptr(), self.dim(), x.as_ptr(), conn.stream.ptr) };
+      x.buf.post(&conn);
+      self.buf.post(&conn);
+    } else {
+      unimplemented!();
+    }
+  }
+
+  pub fn elem_div(&mut self, x: DeviceArray1dView<'a, f32>, conn: DeviceConn) {
+    assert_eq!(self.dim(), x.dim());
+    if self.stride == 1 {
+      x.buf.wait(&conn);
+      self.buf.wait(&conn);
+      unsafe { devicemem_cuda_vector_elemwise_div_f32(self.as_mut_ptr(), self.dim(), x.as_ptr(), conn.stream.ptr) };
       x.buf.post(&conn);
       self.buf.post(&conn);
     } else {
