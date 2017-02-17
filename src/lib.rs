@@ -676,7 +676,7 @@ impl<'a, T> SharedDeviceMemRef<'a, T> where T: 'a + Copy {
 }
 
 pub struct AsyncMem<T> where T: Copy {
-  buf:      Vec<T>,
+  _buf:     Vec<T>,
   tracker:  Rc<RefCell<DeviceMemDependencyTracker>>,
 }
 
@@ -699,7 +699,7 @@ impl<T> AsyncMem<T> where T: ZeroBits {
     let mut buf = Vec::with_capacity(len);
     buf.resize(len, T::zero_bits());
     AsyncMem{
-      buf:      buf,
+      _buf:     buf,
       tracker:  Rc::new(RefCell::new(DeviceMemDependencyTracker::new())),
     }
   }
@@ -707,11 +707,11 @@ impl<T> AsyncMem<T> where T: ZeroBits {
 
 impl<T> AsyncMem<T> where T: Copy {
   pub unsafe fn as_ptr(&self) -> *const T {
-    self.buf.as_ptr()
+    self._buf.as_ptr()
   }
 
   pub fn len(&self) -> usize {
-    self.buf.len()
+    self._buf.len()
   }
 
   pub fn post(&self, conn: &DeviceConn) {
@@ -728,12 +728,12 @@ impl<T> AsyncMem<T> where T: Copy {
 
   pub fn as_ref(&self) -> &[T] {
     self.sync();
-    &self.buf
+    &self._buf
   }
 
   pub fn as_mut(&mut self) -> &mut [T] {
     self.sync();
-    &mut self.buf
+    &mut self._buf
   }
 }
 
@@ -1887,6 +1887,69 @@ impl<'a> Array4dViewMut<'a, f32> {
   }
 }
 */
+
+pub struct DeviceBatchIoMem<T> where T: Copy {
+  bufs:     Vec<DeviceMem<T>>,
+  hbufs:    Vec<AsyncMem<T>>,
+  stride:   usize,
+  batch_sz: usize,
+}
+
+impl<T> DeviceBatchIoMem<T> where T: Copy {
+  pub fn new(buf_stride: usize) -> Self {
+    DeviceBatchIoMem{
+      bufs:     Vec::new(),
+      hbufs:    Vec::new(),
+      stride:   buf_stride,
+      batch_sz: 0,
+    }
+  }
+
+  pub fn stride(&self) -> usize {
+    self.stride
+  }
+
+  pub fn batch_size(&self) -> usize {
+    self.batch_sz
+  }
+
+  pub fn load(&mut self, idx: usize, src: &[T], conn: DeviceConn) {
+    assert!(idx < self.batch_sz);
+    self.hbufs[idx].as_mut().copy_from_slice(src);
+    self.bufs[idx].as_mut().load(&self.hbufs[idx], conn);
+  }
+}
+
+impl<T> DeviceBatchIoMem<T> where T: ZeroBits {
+  pub fn set_batch_size(&mut self, new_batch_sz: usize, stream: &DeviceStream) {
+    if new_batch_sz > self.bufs.len() {
+      for _ in self.batch_sz .. new_batch_sz {
+        let buf = DeviceMem::zeros(self.stride, stream.conn());
+        let hbuf = AsyncMem::zeros(self.stride);
+        self.bufs.push(buf);
+        self.hbufs.push(hbuf);
+      }
+    }
+    assert_eq!(self.bufs.len(), self.hbufs.len());
+    assert!(new_batch_sz <= self.bufs.len());
+    assert!(new_batch_sz <= self.hbufs.len());
+    self.batch_sz = new_batch_sz;
+  }
+}
+
+impl<T> Deref for DeviceBatchIoMem<T> where T: Copy {
+  type Target = [DeviceMem<T>];
+
+  fn deref(&self) -> &[DeviceMem<T>] {
+    &self.bufs[ .. self.batch_sz]
+  }
+}
+
+impl<T> DerefMut for DeviceBatchIoMem<T> where T: Copy {
+  fn deref_mut(&mut self) -> &mut [DeviceMem<T>] {
+    &mut self.bufs[ .. self.batch_sz]
+  }
+}
 
 pub struct DeviceBatchArray1d<T> where T: Copy {
   buf:      DeviceMem<T>,
