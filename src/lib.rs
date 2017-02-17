@@ -1559,6 +1559,36 @@ impl<'a> DeviceArray2dViewMut<'a, f32> {
   }
 }*/
 
+pub struct DeviceArray3d<T> where T: Copy {
+  buf:      DeviceMem<T>,
+  dim:      (usize, usize, usize),
+  stride:   (usize, usize, usize),
+}
+
+impl<T> DeviceArray3d<T> where T: ZeroBits {
+  pub fn zeros(dim: (usize, usize, usize), conn: DeviceConn) -> DeviceArray3d<T> {
+    let len = dim.flat_len();
+    let mut buf = unsafe { DeviceMem::alloc(len, conn.clone()) };
+    unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.raw_stream()) }.unwrap();
+    buf.tracker.borrow_mut().post(&conn);
+    DeviceArray3d{
+      buf:      buf,
+      dim:      dim,
+      stride:   dim.least_stride(),
+    }
+  }
+}
+
+impl<T> DeviceArray3d<T> where T: Copy {
+  pub fn dim(&self) -> (usize, usize, usize) {
+    self.dim
+  }
+
+  pub fn stride(&self) -> (usize, usize, usize) {
+    self.stride
+  }
+}
+
 pub struct DeviceArray4d<T> where T: Copy {
   buf:      DeviceMem<T>,
   dim:      (usize, usize, usize, usize),
@@ -1857,3 +1887,141 @@ impl<'a> Array4dViewMut<'a, f32> {
   }
 }
 */
+
+pub struct DeviceBatchArray1d<T> where T: Copy {
+  buf:      DeviceMem<T>,
+  dim:      usize,
+  stride:   usize,
+  max_batch_sz: usize,
+  batch_sz:     usize,
+  batch_stride: usize,
+}
+
+impl<T> DeviceBatchArray1d<T> where T: ZeroBits {
+  pub fn zeros(dim: usize, batch_cap: usize, conn: DeviceConn) -> DeviceBatchArray1d<T> {
+    let len = dim.flat_len();
+    let mut buf = unsafe { DeviceMem::alloc(len, conn.clone()) };
+    unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.raw_stream()) }.unwrap();
+    buf.tracker.borrow_mut().post(&conn);
+    DeviceBatchArray1d{
+      buf:      buf,
+      dim:      dim,
+      stride:   dim.least_stride(),
+      max_batch_sz: batch_cap,
+      batch_sz:     batch_cap,
+      batch_stride: dim.flat_len(),
+    }
+  }
+}
+
+impl<T> DeviceBatchArray1d<T> where T: Copy {
+  pub fn dim(&self) -> usize {
+    self.dim
+  }
+
+  pub fn stride(&self) -> usize {
+    self.stride
+  }
+
+  pub fn batch_capacity(&self) -> usize {
+    self.max_batch_sz
+  }
+
+  pub fn batch_size(&self) -> usize {
+    self.batch_sz
+  }
+
+  pub fn set_batch_size(&mut self, new_batch_sz: usize) {
+    assert!(new_batch_sz <= self.max_batch_sz);
+    self.batch_sz = new_batch_sz;
+  }
+}
+
+impl<'a, T> AsView<'a, DeviceArray2dView<'a, T>> for DeviceBatchArray1d<T> where T: Copy {
+  fn as_view(&'a self) -> DeviceArray2dView<'a, T> {
+    DeviceArray2dView{
+      buf:      self.buf.as_ref(),
+      dim:      (self.dim, self.batch_sz),
+      stride:   (self.stride, self.batch_stride),
+    }
+  }
+}
+
+impl<'a, T> AsViewMut<'a, DeviceArray2dViewMut<'a, T>> for DeviceBatchArray1d<T> where T: Copy {
+  fn as_view_mut(&'a mut self) -> DeviceArray2dViewMut<'a, T> {
+    DeviceArray2dViewMut{
+      buf:      self.buf.as_mut(),
+      dim:      (self.dim, self.batch_sz),
+      stride:   (self.stride, self.batch_stride),
+    }
+  }
+}
+
+pub struct DeviceBatchArray3d<T> where T: Copy {
+  buf:      DeviceMem<T>,
+  dim:      (usize, usize, usize),
+  stride:   (usize, usize, usize),
+  max_batch_sz: usize,
+  batch_sz:     usize,
+  batch_stride: usize,
+}
+
+impl<T> DeviceBatchArray3d<T> where T: ZeroBits {
+  pub fn zeros(dim: (usize, usize, usize), batch_cap: usize, conn: DeviceConn) -> DeviceBatchArray3d<T> {
+    let len = dim.flat_len();
+    let mut buf = unsafe { DeviceMem::alloc(len, conn.clone()) };
+    unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.raw_stream()) }.unwrap();
+    buf.tracker.borrow_mut().post(&conn);
+    DeviceBatchArray3d{
+      buf:      buf,
+      dim:      dim,
+      stride:   dim.least_stride(),
+      max_batch_sz: batch_cap,
+      batch_sz:     batch_cap,
+      batch_stride: dim.flat_len(),
+    }
+  }
+}
+
+impl<T> DeviceBatchArray3d<T> where T: Copy {
+  pub fn dim(&self) -> (usize, usize, usize) {
+    self.dim
+  }
+
+  pub fn stride(&self) -> (usize, usize, usize) {
+    self.stride
+  }
+
+  pub fn batch_capacity(&self) -> usize {
+    self.max_batch_sz
+  }
+
+  pub fn batch_size(&self) -> usize {
+    self.batch_sz
+  }
+
+  pub fn set_batch_size(&mut self, new_batch_sz: usize) {
+    assert!(new_batch_sz <= self.max_batch_sz);
+    self.batch_sz = new_batch_sz;
+  }
+}
+
+impl<'a, T> AsView<'a, DeviceArray4dView<'a, T>> for DeviceBatchArray3d<T> where T: Copy {
+  fn as_view(&'a self) -> DeviceArray4dView<'a, T> {
+    DeviceArray4dView{
+      buf:      self.buf.as_ref(),
+      dim:      (self.dim.0, self.dim.1, self.dim.2, self.batch_sz),
+      stride:   (self.stride.0, self.stride.1, self.stride.2, self.batch_stride),
+    }
+  }
+}
+
+impl<'a, T> AsViewMut<'a, DeviceArray4dViewMut<'a, T>> for DeviceBatchArray3d<T> where T: Copy {
+  fn as_view_mut(&'a mut self) -> DeviceArray4dViewMut<'a, T> {
+    DeviceArray4dViewMut{
+      buf:      self.buf.as_mut(),
+      dim:      (self.dim.0, self.dim.1, self.dim.2, self.batch_sz),
+      stride:   (self.stride.0, self.stride.1, self.stride.2, self.batch_stride),
+    }
+  }
+}
