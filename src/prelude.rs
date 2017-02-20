@@ -8,6 +8,7 @@ pub use super::{
   DeviceArray2d, DeviceArray2dView, DeviceArray2dViewMut,
   DeviceArray3d,
   DeviceArray4d, DeviceArray4dView, DeviceArray4dViewMut,
+  DeviceIoBatch,
   DeviceBatchIoMem,
   DeviceBatchArray1d,
   DeviceBatchArray3d,

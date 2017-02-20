@@ -100,8 +100,8 @@ impl DeviceStream {
       CudaDevice::set_current(dev_idx).unwrap();
       DeviceStream{
         dev_idx:  dev_idx,
-        stream:   Arc::new(CudaStream::default()),
-        //stream:   Arc::new(CudaStream::create().unwrap()),
+        //stream:   Arc::new(CudaStream::default()),
+        stream:   Arc::new(CudaStream::create().unwrap()),
         cublas:   Rc::new(RefCell::new(None)),
         cudnn:    Rc::new(RefCell::new(None)),
       }
@@ -1756,6 +1756,19 @@ impl<'a, T> DeviceArray4dViewMut<'a, T> where T: 'a + Copy {
   }
 }
 
+impl<'a, T> ViewMut<'a, (usize, usize, usize, usize), DeviceArray4dViewMut<'a, T>> for DeviceArray4dViewMut<'a, T> where T: 'a + Copy {
+  fn view_mut(self, lo: (usize, usize, usize, usize), hi: (usize, usize, usize, usize)) -> DeviceArray4dViewMut<'a, T> {
+    let new_dim = hi.diff(lo);
+    let new_offset = lo.offset(self.stride);
+    let new_offset_end = new_offset + new_dim.flat_len();
+    DeviceArray4dViewMut{
+      buf:      self.buf.slice_mut(new_offset, new_offset_end),
+      dim:      new_dim,
+      stride:   self.stride,
+    }
+  }
+}
+
 impl<'a> DeviceArray4dViewMut<'a, f32> {
   pub fn set_constant(&'a mut self, c: f32, conn: DeviceConn) {
     if self.stride == self.dim.least_stride() {
@@ -1888,6 +1901,45 @@ impl<'a> Array4dViewMut<'a, f32> {
 }
 */
 
+pub struct DeviceIoBatch<T> where T: Copy {
+  buf:  DeviceMem<T>,
+  hbuf: AsyncMem<T>,
+  max_batch_sz: usize,
+  batch_sz:     usize,
+}
+
+impl<T> DeviceIoBatch<T> where T: ZeroBits {
+  pub fn zeros(capacity: usize, conn: DeviceConn) -> Self {
+    DeviceIoBatch{
+      buf:  DeviceMem::zeros(capacity, conn),
+      hbuf: AsyncMem::zeros(capacity),
+      max_batch_sz: capacity,
+      batch_sz:     capacity,
+    }
+  }
+}
+
+impl<T> DeviceIoBatch<T> where T: Copy {
+  pub fn batch_capacity(&self) -> usize {
+    self.max_batch_sz
+  }
+
+  pub fn batch_size(&self) -> usize {
+    self.batch_sz
+  }
+
+  pub fn set_batch_size(&mut self, new_batch_sz: usize) {
+    assert!(new_batch_sz <= self.max_batch_sz);
+    self.batch_sz = new_batch_sz;
+  }
+
+  pub fn load(&mut self, src: &[T], conn: DeviceConn) {
+    assert_eq!(self.batch_sz, src.len());
+    self.hbuf.as_mut().copy_from_slice(src);
+    self.buf.as_mut().load(&self.hbuf, conn);
+  }
+}
+
 pub struct DeviceBatchIoMem<T> where T: Copy {
   bufs:     Vec<DeviceMem<T>>,
   hbufs:    Vec<AsyncMem<T>>,
@@ -1896,11 +1948,11 @@ pub struct DeviceBatchIoMem<T> where T: Copy {
 }
 
 impl<T> DeviceBatchIoMem<T> where T: Copy {
-  pub fn new(buf_stride: usize) -> Self {
+  pub fn new(stride: usize) -> Self {
     DeviceBatchIoMem{
       bufs:     Vec::new(),
       hbufs:    Vec::new(),
-      stride:   buf_stride,
+      stride:   stride,
       batch_sz: 0,
     }
   }
