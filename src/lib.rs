@@ -901,16 +901,23 @@ impl<'a, T> DeviceMemRef<'a, T> where T: 'a + Copy {
 
   pub fn store_sync(&mut self, output: &mut [T], conn: DeviceConn) {
     assert_eq!(self.len(), output.len());
-    //self.wait(&conn);
+    self.wait(&conn);
     self.sync();
     conn.sync();
-    let status = unsafe { cuda_memcpy_async(
+    /*let status = unsafe { cuda_memcpy_async(
         output.as_mut_ptr(),
         self.as_ptr(),
         self.len(),
         CudaMemcpyKind::DeviceToHost,
         &conn.raw_stream(),
+    ) };*/
+    let status = unsafe { cuda_memcpy(
+        output.as_mut_ptr(),
+        self.as_ptr(),
+        self.len(),
+        CudaMemcpyKind::DeviceToHost,
     ) };
+    assert!(status.is_ok());
     self.post(&conn);
     self.wait(&conn);
     conn.sync();
@@ -1036,13 +1043,17 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
     //self.wait(&conn);
     self.sync();
     conn.sync();
-    let status = unsafe { cuda_memcpy_async(
+    let status = unsafe { cuda_memcpy(
         self.as_mut_ptr(),
         input.as_ptr(),
         self.len(),
         CudaMemcpyKind::HostToDevice,
-        &conn.raw_stream(),
+        //&conn.raw_stream(),
     ) };
+    match status {
+      Ok(_) => {}
+      Err(e) => panic!("cudaMemcpy failed: {:?}", e),
+    }
     self.post(&conn);
     self.wait(&conn);
     conn.sync();
@@ -1158,16 +1169,23 @@ impl<'a, T> DeviceArray1dView<'a, T> where T: 'a + Copy {
   pub fn store_sync(&mut self, mut output: Array1dViewMut<'a, T>, conn: DeviceConn) {
     assert_eq!(self.dim(), output.dim());
     if self.stride() == self.dim().least_stride() && self.stride() == output.stride() {
-      //self.buf.wait(&conn);
+      self.buf.wait(&conn);
       self.buf.sync();
       conn.sync();
-      let status = unsafe { cuda_memcpy_async(
+      /*let status = unsafe { cuda_memcpy_async(
           output.as_mut_ptr(),
           self.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::DeviceToHost,
           &conn.raw_stream(),
+      ) };*/
+      let status = unsafe { cuda_memcpy(
+          output.as_mut_ptr(),
+          self.as_ptr(),
+          self.dim().flat_len(),
+          CudaMemcpyKind::DeviceToHost,
       ) };
+      assert!(status.is_ok());
       self.buf.post(&conn);
       self.buf.wait(&conn);
       conn.sync();
@@ -1266,13 +1284,17 @@ impl<'a, T> DeviceArray1dViewMut<'a, T> where T: 'a + Copy {
       //self.buf.wait(&conn);
       self.buf.sync();
       conn.sync();
-      let status = unsafe { cuda_memcpy_async(
+      let status = unsafe { cuda_memcpy(
           self.as_mut_ptr(),
           input.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::HostToDevice,
-          &conn.raw_stream(),
+          //&conn.raw_stream(),
       ) };
+      match status {
+        Ok(_) => {}
+        Err(e) => panic!("cudaMemcpy failed: {:?}", e),
+      }
       self.buf.post(&conn);
       self.buf.wait(&conn);
       conn.sync();
@@ -1421,16 +1443,27 @@ impl<'a, T> DeviceArray2dView<'a, T> where T: 'a + Copy {
   pub fn store_sync(&mut self, mut output: Array2dViewMut<'a, T>, conn: DeviceConn) {
     assert_eq!(self.dim(), output.dim());
     if self.stride() == self.dim().least_stride() && self.stride() == output.stride() {
-      //self.buf.wait(&conn);
+      self.buf.wait(&conn);
       self.buf.sync();
       conn.sync();
-      let status = unsafe { cuda_memcpy_async(
+      /*let status = unsafe { cuda_memcpy_async(
           output.as_mut_ptr(),
           self.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::DeviceToHost,
           &conn.raw_stream(),
+      ) };*/
+      let status = unsafe { cuda_memcpy(
+          output.as_mut_ptr(),
+          self.as_ptr(),
+          self.dim().flat_len(),
+          CudaMemcpyKind::DeviceToHost,
       ) };
+      //assert!(status.is_ok());
+      match status {
+        Ok(_) => {}
+        Err(e) => panic!("cudaMemcpy failed: {:?}", e),
+      }
       self.buf.post(&conn);
       self.buf.wait(&conn);
       conn.sync();
@@ -1505,13 +1538,17 @@ impl<'a, T> DeviceArray2dViewMut<'a, T> where T: 'a + Copy {
       //self.buf.wait(&conn);
       self.buf.sync();
       conn.sync();
-      let status = unsafe { cuda_memcpy_async(
+      let status = unsafe { cuda_memcpy(
           self.as_mut_ptr(),
           input.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::HostToDevice,
-          &conn.raw_stream(),
+          //&conn.raw_stream(),
       ) };
+      match status {
+        Ok(_) => {}
+        Err(e) => panic!("cudaMemcpy failed: {:?}", e),
+      }
       self.buf.post(&conn);
       self.buf.wait(&conn);
       conn.sync();
@@ -1669,16 +1706,23 @@ impl<'a, T> DeviceArray4dView<'a, T> where T: 'a + Copy {
   pub fn store_sync(&mut self, mut output: Array4dViewMut<'a, T>, conn: DeviceConn) {
     assert_eq!(self.dim(), output.dim());
     if self.stride() == self.dim().least_stride() && self.stride() == output.stride() {
-      //self.buf.wait(&conn);
+      self.buf.wait(&conn);
       self.buf.sync();
       conn.sync();
-      let status = unsafe { cuda_memcpy_async(
+      /*let status = unsafe { cuda_memcpy_async(
           output.as_mut_ptr(),
           self.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::DeviceToHost,
           &conn.raw_stream(),
+      ) };*/
+      let status = unsafe { cuda_memcpy(
+          output.as_mut_ptr(),
+          self.as_ptr(),
+          self.dim().flat_len(),
+          CudaMemcpyKind::DeviceToHost,
       ) };
+      assert!(status.is_ok());
       self.buf.post(&conn);
       self.buf.wait(&conn);
       conn.sync();
@@ -1740,13 +1784,17 @@ impl<'a, T> DeviceArray4dViewMut<'a, T> where T: 'a + Copy {
       //self.buf.wait(&conn);
       self.buf.sync();
       conn.sync();
-      let status = unsafe { cuda_memcpy_async(
+      let status = unsafe { cuda_memcpy(
           self.as_mut_ptr(),
           input.as_ptr(),
           self.dim().flat_len(),
           CudaMemcpyKind::HostToDevice,
-          &conn.raw_stream(),
+          //&conn.raw_stream(),
       ) };
+      match status {
+        Ok(_) => {}
+        Err(e) => panic!("cudaMemcpy failed: {:?}", e),
+      }
       self.buf.post(&conn);
       self.buf.wait(&conn);
       conn.sync();
@@ -1928,15 +1976,38 @@ impl<T> DeviceIoBatch<T> where T: Copy {
     self.batch_sz
   }
 
-  pub fn set_batch_size(&mut self, new_batch_sz: usize) {
+  pub fn set_batch_size(&mut self, new_batch_sz: usize) -> &mut Self {
     assert!(new_batch_sz <= self.max_batch_sz);
     self.batch_sz = new_batch_sz;
+    self
   }
 
   pub fn load(&mut self, src: &[T], conn: DeviceConn) {
     assert_eq!(self.batch_sz, src.len());
     self.hbuf.as_mut().copy_from_slice(src);
     self.buf.as_mut().load(&self.hbuf, conn);
+  }
+
+  pub fn as_ref<'a>(&'a self) -> DeviceMemRef<'a, T> {
+    DeviceMemRef{
+      dev_idx:  self.buf.dev_idx,
+      mem_dptr: self.buf.dptr,
+      offset:   0,
+      len:      self.batch_sz,
+      tracker:  self.buf.tracker.clone(),
+      _marker:  PhantomData,
+    }
+  }
+
+  pub fn as_mut<'a>(&'a mut self) -> DeviceMemRefMut<'a, T> {
+    DeviceMemRefMut{
+      dev_idx:  self.buf.dev_idx,
+      mem_dptr: self.buf.dptr,
+      offset:   0,
+      len:      self.batch_sz,
+      tracker:  self.buf.tracker.clone(),
+      _marker:  PhantomData,
+    }
   }
 }
 
@@ -1973,7 +2044,7 @@ impl<T> DeviceBatchIoMem<T> where T: Copy {
 }
 
 impl<T> DeviceBatchIoMem<T> where T: ZeroBits {
-  pub fn set_batch_size(&mut self, new_batch_sz: usize, stream: &DeviceStream) {
+  pub fn set_batch_size(&mut self, new_batch_sz: usize, stream: &DeviceStream) -> &mut Self {
     if new_batch_sz > self.bufs.len() {
       for _ in self.batch_sz .. new_batch_sz {
         let buf = DeviceMem::zeros(self.stride, stream.conn());
@@ -1986,6 +2057,7 @@ impl<T> DeviceBatchIoMem<T> where T: ZeroBits {
     assert!(new_batch_sz <= self.bufs.len());
     assert!(new_batch_sz <= self.hbufs.len());
     self.batch_sz = new_batch_sz;
+    self
   }
 }
 
@@ -2014,8 +2086,8 @@ pub struct DeviceBatchArray1d<T> where T: Copy {
 
 impl<T> DeviceBatchArray1d<T> where T: ZeroBits {
   pub fn zeros(dim: usize, batch_cap: usize, conn: DeviceConn) -> DeviceBatchArray1d<T> {
-    let len = dim.flat_len();
-    let mut buf = unsafe { DeviceMem::alloc(len, conn.clone()) };
+    let buf_len = dim.flat_len() * batch_cap;
+    let mut buf = unsafe { DeviceMem::alloc(buf_len, conn.clone()) };
     unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.raw_stream()) }.unwrap();
     buf.tracker.borrow_mut().post(&conn);
     DeviceBatchArray1d{
@@ -2046,9 +2118,10 @@ impl<T> DeviceBatchArray1d<T> where T: Copy {
     self.batch_sz
   }
 
-  pub fn set_batch_size(&mut self, new_batch_sz: usize) {
+  pub fn set_batch_size(&mut self, new_batch_sz: usize) -> &mut Self {
     assert!(new_batch_sz <= self.max_batch_sz);
     self.batch_sz = new_batch_sz;
+    self
   }
 }
 
@@ -2083,8 +2156,8 @@ pub struct DeviceBatchArray3d<T> where T: Copy {
 
 impl<T> DeviceBatchArray3d<T> where T: ZeroBits {
   pub fn zeros(dim: (usize, usize, usize), batch_cap: usize, conn: DeviceConn) -> DeviceBatchArray3d<T> {
-    let len = dim.flat_len();
-    let mut buf = unsafe { DeviceMem::alloc(len, conn.clone()) };
+    let buf_len = dim.flat_len() * batch_cap;
+    let mut buf = unsafe { DeviceMem::alloc(buf_len, conn.clone()) };
     unsafe { cuda_memset_async(buf.dptr as *mut _, 0, buf.size_bytes(), &*conn.raw_stream()) }.unwrap();
     buf.tracker.borrow_mut().post(&conn);
     DeviceBatchArray3d{
@@ -2115,9 +2188,10 @@ impl<T> DeviceBatchArray3d<T> where T: Copy {
     self.batch_sz
   }
 
-  pub fn set_batch_size(&mut self, new_batch_sz: usize) {
+  pub fn set_batch_size(&mut self, new_batch_sz: usize) -> &mut Self {
     assert!(new_batch_sz <= self.max_batch_sz);
     self.batch_sz = new_batch_sz;
+    self
   }
 }
 

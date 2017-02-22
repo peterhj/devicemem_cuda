@@ -79,10 +79,22 @@ impl<'a> DeviceArray1dViewMut<'a, f32> {
     }
   }
 
-  pub fn add_scalar(&mut self, c: f32, conn: DeviceConn) {
+  pub fn add_constant(&mut self, c: f32, conn: DeviceConn) {
     if self.stride == 1 {
       self.buf.wait(&conn);
-      unsafe { devicemem_cuda_vector_add_scalar_f32(self.as_mut_ptr(), self.dim(), c, conn.stream.ptr) };
+      unsafe { devicemem_cuda_vector_add_constant_f32(self.as_mut_ptr(), self.dim(), c, conn.stream.ptr) };
+      self.buf.post(&conn);
+    } else {
+      unimplemented!();
+    }
+  }
+
+  pub fn add_scalar(&mut self, c: DeviceMemRef<'a, f32>, conn: DeviceConn) {
+    if self.stride == 1 {
+      c.wait(&conn);
+      self.buf.wait(&conn);
+      unsafe { devicemem_cuda_vector_add_scalar_f32(self.dim(), c.as_ptr(), self.as_mut_ptr(), conn.stream.ptr) };
+      c.post(&conn);
       self.buf.post(&conn);
     } else {
       unimplemented!();

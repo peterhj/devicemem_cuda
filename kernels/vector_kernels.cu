@@ -25,7 +25,7 @@ extern "C" void devicemem_cuda_vector_set_scalar_f32(
       dst, dim, c);
 }
 
-__global__ void vector_add_scalar_f32_kernel(
+__global__ void vector_add_constant_f32_kernel(
     float *dst,
     int dim,
     float c)
@@ -37,14 +37,35 @@ __global__ void vector_add_scalar_f32_kernel(
   }
 }
 
-extern "C" void devicemem_cuda_vector_add_scalar_f32(
+extern "C" void devicemem_cuda_vector_add_constant_f32(
     float *dst,
     size_t dim,
     float c,
     cudaStream_t stream)
 {
-  vector_add_scalar_f32_kernel<<<(dim+1024-1)/1024, 1024, 0, stream>>>(
+  vector_add_constant_f32_kernel<<<(dim+1024-1)/1024, 1024, 0, stream>>>(
       dst, dim, c);
+}
+
+__global__ void vector_add_scalar_f32_kernel(
+    uint32_t dim,
+    const float *c,
+    float *y)
+{
+  uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+  if (idx < dim) {
+    y[idx] += c[0];
+  }
+}
+
+extern "C" void devicemem_cuda_vector_add_scalar_f32(
+    size_t dim,
+    const float *c,
+    float *y,
+    cudaStream_t stream)
+{
+  vector_add_scalar_f32_kernel<<<(dim+1024-1)/1024, 1024, 0, stream>>>(
+      dim, c, y);
 }
 
 __global__ void vector_scale_f32_kernel(
