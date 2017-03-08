@@ -18,6 +18,7 @@ use kernels::*;
 
 use async_execution::*;
 use cuda::runtime::*;
+use cuda::ffi::runtime::{cudaDeviceProp};
 use cuda_blas::{CublasHandle};
 use cuda_dnn::v5::{CudnnHandle};
 use densearray::prelude::*;
@@ -49,8 +50,8 @@ pub struct DeviceStreamExecCtxGuard;
 impl Drop for DeviceStreamExecCtxGuard {
   fn drop(&mut self) {
     EXEC_CTX_STACK.with(|stack| {
-      *stack.active.borrow_mut() = None;
-      //let _ = stack.implicit.borrow_mut().pop();
+      /* *stack.active.borrow_mut() = None;*/
+      let _ = stack.implicit.borrow_mut().pop();
     });
   }
 }
@@ -58,6 +59,7 @@ impl Drop for DeviceStreamExecCtxGuard {
 #[derive(Clone)]
 pub struct DeviceStream {
   dev_idx:  usize,
+  dev_prop: Rc<cudaDeviceProp>,
   stream:   Arc<CudaStream>,
   cublas:   Rc<RefCell<Option<Rc<CublasHandle>>>>,
   cudnn:    Rc<RefCell<Option<Rc<CudnnHandle>>>>,
@@ -66,28 +68,29 @@ pub struct DeviceStream {
 impl ExecutionContext for DeviceStream {
   type Guard = DeviceStreamExecCtxGuard;
 
-  fn implicit() -> Rc<DeviceStream> {
-    EXEC_CTX_STACK.with(|stack| {
-      let active = stack.active.borrow();
-      match &*active {
-        &None => panic!(),
-        &Some(ref stream) => stream.clone(),
-      }
-    })
-  }
-
   fn max_depth() -> Option<usize> {
-    Some(1)
+    None
   }
 
   fn push(ctx: Rc<DeviceStream>) -> DeviceStreamExecCtxGuard {
     EXEC_CTX_STACK.with(|stack| {
-      //unimplemented!();
-      assert!(stack.active.borrow().is_none());
-      *stack.active.borrow_mut() = Some(ctx);
-      //stack.implicit.borrow_mut().push();
+      /*assert!(stack.active.borrow().is_none());
+      *stack.active.borrow_mut() = Some(ctx);*/
+      stack.implicit.borrow_mut().push(ctx);
     });
     DeviceStreamExecCtxGuard
+  }
+
+  fn implicit() -> Rc<DeviceStream> {
+    EXEC_CTX_STACK.with(|stack| {
+      /*let active = stack.active.borrow();
+      match &*active {
+        &None => panic!(),
+        &Some(ref stream) => stream.clone(),
+      }*/
+      let implicit = stack.implicit.borrow();
+      implicit[implicit.len() - 1].clone()
+    })
   }
 }
 
@@ -97,10 +100,15 @@ impl DeviceStream {
       let driver = driver.clone();
       assert!(Rc::strong_count(&driver) <= 2,
           "DriverContext does not support nesting");
+      let dev_prop = CudaDevice::get_properties(dev_idx).unwrap();
+      println!("DEBUG: cuda: device: index: {} smp count: {}", dev_idx, dev_prop.multiprocessor_count);
+      println!("DEBUG: cuda: device: index: {} shared mem per smp: {}", dev_idx, dev_prop.shared_mem_per_multiprocessor);
+      println!("DEBUG: cuda: device: index: {} registers per smp: {}", dev_idx, dev_prop.regs_per_multiprocessor);
       CudaDevice::set_current(dev_idx).unwrap();
       DeviceStream{
         dev_idx:  dev_idx,
         //stream:   Arc::new(CudaStream::default()),
+        dev_prop: Rc::new(dev_prop),
         stream:   Arc::new(CudaStream::create().unwrap()),
         cublas:   Rc::new(RefCell::new(None)),
         cudnn:    Rc::new(RefCell::new(None)),
