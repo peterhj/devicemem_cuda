@@ -2023,6 +2023,7 @@ pub struct DeviceBatchIoMem<T> where T: Copy {
   bufs:     Vec<DeviceMem<T>>,
   hbufs:    Vec<AsyncMem<T>>,
   stride:   usize,
+  capacity: Option<usize>,
   batch_sz: usize,
 }
 
@@ -2032,12 +2033,27 @@ impl<T> DeviceBatchIoMem<T> where T: Copy {
       bufs:     Vec::new(),
       hbufs:    Vec::new(),
       stride:   stride,
+      capacity: None,
+      batch_sz: 0,
+    }
+  }
+
+  pub fn with_capacity(stride: usize, capacity: usize) -> Self {
+    DeviceBatchIoMem{
+      bufs:     Vec::with_capacity(capacity),
+      hbufs:    Vec::with_capacity(capacity),
+      stride:   stride,
+      capacity: Some(capacity),
       batch_sz: 0,
     }
   }
 
   pub fn stride(&self) -> usize {
     self.stride
+  }
+
+  pub fn batch_capacity(&self) -> Option<usize> {
+    self.capacity
   }
 
   pub fn batch_size(&self) -> usize {
