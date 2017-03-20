@@ -6,6 +6,23 @@ use cuda_blas::*;
 use cuda_blas::ffi::*;
 use densearray::linalg::{Transpose};
 
+impl<'a> DeviceMemRef<'a, f32> {
+  pub fn unsafe_copy(&self, src: DeviceMemRef<'a, f32>, conn: DeviceConn) {
+    // TODO
+    unimplemented!();
+  }
+
+  pub fn unsafe_send(&self, dst: DeviceMemRef<'a, f32>, conn: DeviceConn) {
+    // TODO
+    unimplemented!();
+  }
+
+  pub fn unsafe_add(&self, x: DeviceMemRef<'a, f32>, conn: DeviceConn) {
+    // TODO
+    unimplemented!();
+  }
+}
+
 impl<'a> DeviceMemRefMut<'a, f32> {
   pub fn inner_prod(&mut self, x: DeviceArray1dView<'a, f32>, y: DeviceArray1dView<'a, f32>, conn: DeviceConn) {
     assert_eq!(x.dim(), y.dim());

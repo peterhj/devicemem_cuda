@@ -23,5 +23,6 @@ cuda_blas = "^0.1"
 cuda_dnn = "^0.1"
 #densearray = { path = "../libdensearray" }
 densearray = "^0.1"
-nccl = { path = "../libnccl" }
+#nccl = { path = "../libnccl" }
+nvsmi = { path = "../libnvsmi" }
 sharedmem = "^0.1"

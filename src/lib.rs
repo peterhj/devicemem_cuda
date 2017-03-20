@@ -9,7 +9,8 @@ extern crate cuda;
 extern crate cuda_blas;
 extern crate cuda_dnn;
 extern crate densearray;
-extern crate nccl;
+//extern crate nccl;
+extern crate nvsmi;
 extern crate sharedmem;
 
 extern crate libc;
@@ -29,15 +30,39 @@ use std::mem::{size_of};
 //use std::num::{Zero};
 use std::ops::{Deref, DerefMut};
 use std::rc::{Rc};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once, ONCE_INIT};
 
-pub mod coll;
+//pub mod coll;
+pub mod comm;
 pub mod kernels;
 pub mod linalg;
 pub mod prelude;
 //pub mod stats;
 
-thread_local!(static DRIVER_CONTEXT: Rc<DriverContext> = Rc::new(DriverContext{}));
+static INIT: Once = ONCE_INIT;
+
+thread_local!(static DRIVER_CONTEXT: Rc<DriverContext> = {
+  INIT.call_once(|| {
+    for dst in CudaDevice::iter().unwrap() {
+      match CudaDevice::set_current(dst) {
+        Ok(_) => {}
+        Err(e) => {
+          panic!("failed to set current device ({}): {:?}", dst, e);
+        }
+      }
+      for src in CudaDevice::iter().unwrap() {
+        if dst == src {
+          continue;
+        }
+        if CudaDevice::can_access_peer(dst, src).unwrap() {
+          CudaDevice::enable_peer_access(src).unwrap();
+        }
+      }
+    }
+    CudaDevice::set_current(0);
+  });
+  Rc::new(DriverContext{})
+});
 thread_local!(static EXEC_CTX_STACK: Rc<ExecCtxStack<DeviceStream>> = Rc::new(ExecCtxStack::new()));
 
 struct DriverContext {}
@@ -120,6 +145,11 @@ impl DeviceStream {
     self.stream.synchronize().unwrap();
   }
 
+  pub fn blocking_sync(&self) {
+    // FIXME: use an event with the blocking flag set.
+    self.stream.synchronize().unwrap();
+  }
+
   pub fn conn(&self) -> DeviceConn {
     DRIVER_CONTEXT.with(|driver| {
       let driver = driver.clone();
@@ -189,6 +219,38 @@ impl DeviceConn {
     cudnn.as_ref().unwrap().set_stream(&*self.stream).unwrap();
     cudnn.as_ref().unwrap().clone()
   }
+
+  pub fn wait(&self, event: &mut DeviceSignal) {
+    match self.raw_stream().wait_event(&event.inner) {
+      Err(e) => panic!("failed to wait on cuda event: {:?}", e),
+      Ok(_) => {}
+    }
+  }
+}
+
+pub struct DeviceSignal {
+  dev_idx:  usize,
+  inner:    CudaEvent,
+}
+
+impl DeviceSignal {
+  pub fn new(conn: DeviceConn) -> DeviceSignal {
+    let inner = match CudaEvent::create_fastest() {
+      Err(e) => panic!("failed to create cuda event: {:?}", e),
+      Ok(event) => event,
+    };
+    DeviceSignal{
+      dev_idx:  conn.device(),
+      inner:    inner,
+    }
+  }
+
+  pub fn record(&mut self, conn: DeviceConn) {
+    match self.inner.record(&conn.raw_stream()) {
+      Err(e) => panic!("failed to record cuda event: {:?}", e),
+      Ok(_) => {}
+    }
+  }
 }
 
 pub trait DeviceDependencyTracker {
@@ -197,9 +259,11 @@ pub trait DeviceDependencyTracker {
 }
 
 pub struct DeviceMemDependencyTracker {
-  guards:   Cell<usize>,
+  /*guards:   Cell<usize>,
   events:   Vec<(Arc<CudaStream>, Rc<CudaEvent>)>,
-  posts:    Vec<Rc<CudaEvent>>,
+  posts:    Vec<Rc<CudaEvent>>,*/
+  events:   Vec<(Arc<CudaStream>, Arc<CudaEvent>)>,
+  posts:    Vec<Arc<CudaEvent>>,
 }
 
 impl Drop for DeviceMemDependencyTracker {
@@ -211,7 +275,7 @@ impl Drop for DeviceMemDependencyTracker {
 impl DeviceMemDependencyTracker {
   pub fn new() -> DeviceMemDependencyTracker {
     DeviceMemDependencyTracker{
-      guards:   Cell::new(0),
+      //guards:   Cell::new(0),
       events:   vec![],
       posts:    vec![],
     }
@@ -243,7 +307,7 @@ impl DeviceMemDependencyTracker {
       }
     }
     //println!("DEBUG: new stream, new event");
-    let event = Rc::new(CudaEvent::create_fastest().unwrap());
+    let event = Arc::new(CudaEvent::create_fastest().unwrap());
     self.events.push((conn.raw_stream().clone(), event.clone()));
     event.record(&conn.raw_stream()).unwrap();
     self.posts.push(event);
@@ -298,7 +362,7 @@ impl<'a, T> AsViewMut<'a, DeviceArray1dViewMut<'a, T>> for DeviceArray1d<T> wher
   }
 }
 
-impl<'a, T> Flatten<'a, DeviceArray1dView<'a, T>> for DeviceMemRef<'a, T> where T: Copy {
+impl<'a, T> FlatView<'a, DeviceArray1dView<'a, T>> for DeviceMemRef<'a, T> where T: Copy {
   fn flatten(self) -> DeviceArray1dView<'a, T> {
     let len = self.len();
     self.reshape(len)
@@ -317,7 +381,7 @@ impl<'a, T> Reshape<'a, usize, DeviceArray1dView<'a, T>> for DeviceMemRef<'a, T>
   }
 }
 
-impl<'a, T> FlattenMut<'a, DeviceArray1dViewMut<'a, T>> for DeviceMemRefMut<'a, T> where T: Copy {
+impl<'a, T> FlatViewMut<'a, DeviceArray1dViewMut<'a, T>> for DeviceMemRefMut<'a, T> where T: Copy {
   fn flatten_mut(self) -> DeviceArray1dViewMut<'a, T> {
     let len = self.len();
     self.reshape_mut(len)
@@ -360,7 +424,7 @@ impl<'a, T> ReshapeMut<'a, (usize, usize), DeviceArray2dViewMut<'a, T>> for Devi
   }
 }
 
-impl<'a, T> Flatten<'a, DeviceArray1dView<'a, T>> for DeviceArray2dView<'a, T> where T: Copy {
+impl<'a, T> FlatView<'a, DeviceArray1dView<'a, T>> for DeviceArray2dView<'a, T> where T: Copy {
   fn flatten(self) -> DeviceArray1dView<'a, T> {
     let len = self.dim.flat_len();
     self.reshape(len)
@@ -379,7 +443,7 @@ impl<'a, T> Reshape<'a, usize, DeviceArray1dView<'a, T>> for DeviceArray2dView<'
   }
 }
 
-impl<'a, T> FlattenMut<'a, DeviceArray1dViewMut<'a, T>> for DeviceArray2dViewMut<'a, T> where T: Copy {
+impl<'a, T> FlatViewMut<'a, DeviceArray1dViewMut<'a, T>> for DeviceArray2dViewMut<'a, T> where T: Copy {
   fn flatten_mut(self) -> DeviceArray1dViewMut<'a, T> {
     let len = self.dim.flat_len();
     self.reshape_mut(len)
@@ -398,7 +462,7 @@ impl<'a, T> ReshapeMut<'a, usize, DeviceArray1dViewMut<'a, T>> for DeviceArray2d
   }
 }
 
-impl<'a, T> Flatten<'a, DeviceArray1dView<'a, T>> for DeviceArray4dView<'a, T> where T: Copy {
+impl<'a, T> FlatView<'a, DeviceArray1dView<'a, T>> for DeviceArray4dView<'a, T> where T: Copy {
   fn flatten(self) -> DeviceArray1dView<'a, T> {
     let len = self.dim.flat_len();
     self.reshape(len)
@@ -417,7 +481,7 @@ impl<'a, T> Reshape<'a, usize, DeviceArray1dView<'a, T>> for DeviceArray4dView<'
   }
 }
 
-impl<'a, T> FlattenMut<'a, DeviceArray1dViewMut<'a, T>> for DeviceArray4dViewMut<'a, T> where T: Copy {
+impl<'a, T> FlatViewMut<'a, DeviceArray1dViewMut<'a, T>> for DeviceArray4dViewMut<'a, T> where T: Copy {
   fn flatten_mut(self) -> DeviceArray1dViewMut<'a, T> {
     let len = self.dim.flat_len();
     self.reshape_mut(len)
@@ -749,8 +813,11 @@ pub struct DeviceMem<T> where T: Copy {
   dev_idx:  usize,
   dptr:     *mut T,
   len:      usize,
-  tracker:  Rc<RefCell<DeviceMemDependencyTracker>>,
+  //tracker:  Rc<RefCell<DeviceMemDependencyTracker>>,
+  tracker:  RefCell<DeviceMemDependencyTracker>,
 }
+
+unsafe impl<T> Send for DeviceMem<T> where T: Copy {}
 
 impl<T> DeviceMem<T> where T: ZeroBits {
   pub fn zeros(len: usize, conn: DeviceConn) -> DeviceMem<T> {
@@ -771,7 +838,8 @@ impl<T> DeviceMem<T> where T: Copy {
       dev_idx:  conn.device(),
       dptr:     dptr,
       len:      len,
-      tracker:  Rc::new(RefCell::new(DeviceMemDependencyTracker::new())),
+      //tracker:  Rc::new(RefCell::new(DeviceMemDependencyTracker::new())),
+      tracker:  RefCell::new(DeviceMemDependencyTracker::new()),
     }
   }
 
@@ -798,7 +866,8 @@ impl<T> DeviceMem<T> where T: Copy {
       mem_dptr: self.dptr,
       offset:   0,
       len:      self.len,
-      tracker:  self.tracker.clone(),
+      //tracker:  self.tracker.clone(),
+      tracker:  &self.tracker,
       _marker:  PhantomData,
     }
   }
@@ -811,20 +880,21 @@ impl<T> DeviceMem<T> where T: Copy {
       mem_dptr: self.dptr,
       offset:   0,
       len:      len,
-      tracker:  self.tracker.clone(),
+      //tracker:  self.tracker.clone(),
+      tracker:  &self.tracker,
       _marker:  PhantomData,
     }
   }
 }
 
-#[derive(Clone)]
+/*#[derive(Clone)]
 pub struct NewDeviceMemRef<'a, T> where T: 'a + Copy {
   mem_dptr: *mut T,
   offset:   usize,
   len:      usize,
   tracker:  Rc<DeviceDependencyTracker + 'static>,
   _marker:  PhantomData<&'a ()>,
-}
+}*/
 
 pub struct PostGuard<'a> {
   post:     bool,
@@ -835,9 +905,11 @@ pub struct PostGuard<'a> {
 impl<'a> Drop for PostGuard<'a> {
   fn drop(&mut self) {
     if self.post {
-      let nguards = self.tracker.borrow().guards.get();
+      // FIXME
+      unimplemented!();
+      /*let nguards = self.tracker.borrow().guards.get();
       self.tracker.borrow().guards.set(nguards - 1);
-      self.tracker.borrow_mut().post(self.conn);
+      self.tracker.borrow_mut().post(self.conn);*/
     }
   }
 }
@@ -849,7 +921,8 @@ pub struct DeviceMemRef<'a, T> where T: 'a + Copy {
   mem_dptr: *mut T,
   offset:   usize,
   len:      usize,
-  tracker:  Rc<RefCell<DeviceMemDependencyTracker>>,
+  //tracker:  Rc<RefCell<DeviceMemDependencyTracker>>,
+  tracker:  &'a RefCell<DeviceMemDependencyTracker>,
   _marker:  PhantomData<&'a ()>,
 }
 
@@ -867,14 +940,16 @@ impl<'a, T> DeviceMemRef<'a, T> where T: 'a + Copy {
   }
 
   pub fn track<'c>(&'c self, conn: &'c DeviceConn) -> PostGuard<'c> {
-    let nguards = self.tracker.borrow().guards.get();
+    // FIXME
+    unimplemented!();
+    /*let nguards = self.tracker.borrow().guards.get();
     let mut post = false;
     if nguards == 0 {
       post = true;
       self.tracker.borrow().guards.set(nguards + 1);
       self.tracker.borrow_mut().wait(conn);
     }
-    PostGuard{post: post, tracker: self.tracker.clone(), conn: conn}
+    PostGuard{post: post, tracker: self.tracker.clone(), conn: conn}*/
   }
 
   pub fn post(&self, conn: &DeviceConn) {
@@ -905,6 +980,32 @@ impl<'a, T> DeviceMemRef<'a, T> where T: 'a + Copy {
       tracker:  self.tracker,
       _marker:  PhantomData,
     }
+  }
+
+  pub fn send<'b>(&self, dst: &mut DeviceMemRefMut<'b, T>, conn: DeviceConn) {
+    assert_eq!(self.len(), dst.len());
+    dst.wait(&conn);
+    self.wait(&conn);
+    if self.dev_idx == dst.dev_idx {
+      let status = unsafe { cuda_memcpy_async(
+          dst.as_mut_ptr(),
+          self.as_ptr(),
+          self.len(),
+          CudaMemcpyKind::DeviceToDevice,
+          &conn.raw_stream(),
+      ) };
+      assert!(status.is_ok());
+    } else {
+      let status = unsafe { cuda_memcpy_peer_async(
+          dst.as_mut_ptr(), dst.dev_idx,
+          self.as_ptr(), self.dev_idx,
+          self.len(),
+          &conn.raw_stream(),
+      ) };
+      assert!(status.is_ok());
+    }
+    dst.post(&conn);
+    self.post(&conn);
   }
 
   pub fn store_sync(&mut self, output: &mut [T], conn: DeviceConn) {
@@ -939,7 +1040,8 @@ pub struct DeviceMemRefMut<'a, T> where T: 'a + Copy {
   mem_dptr: *mut T,
   offset:   usize,
   len:      usize,
-  tracker:  Rc<RefCell<DeviceMemDependencyTracker>>,
+  //tracker:  Rc<RefCell<DeviceMemDependencyTracker>>,
+  tracker:  &'a RefCell<DeviceMemDependencyTracker>,
   _marker:  PhantomData<&'a mut ()>,
 }
 
@@ -961,14 +1063,16 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
   }
 
   pub fn track<'c>(&'c self, conn: &'c DeviceConn) -> PostGuard<'c> {
-    let nguards = self.tracker.borrow().guards.get();
+    // FIXME
+    unimplemented!();
+    /*let nguards = self.tracker.borrow().guards.get();
     let mut post = false;
     if nguards == 0 {
       post = true;
       self.tracker.borrow().guards.set(nguards + 1);
       self.tracker.borrow_mut().wait(conn);
     }
-    PostGuard{post: post, tracker: self.tracker.clone(), conn: conn}
+    PostGuard{post: post, tracker: self.tracker.clone(), conn: conn}*/
   }
 
   pub fn post(&self, conn: &DeviceConn) {
@@ -2002,7 +2106,8 @@ impl<T> DeviceIoBatch<T> where T: Copy {
       mem_dptr: self.buf.dptr,
       offset:   0,
       len:      self.batch_sz,
-      tracker:  self.buf.tracker.clone(),
+      //tracker:  self.buf.tracker.clone(),
+      tracker:  &self.buf.tracker,
       _marker:  PhantomData,
     }
   }
@@ -2013,7 +2118,8 @@ impl<T> DeviceIoBatch<T> where T: Copy {
       mem_dptr: self.buf.dptr,
       offset:   0,
       len:      self.batch_sz,
-      tracker:  self.buf.tracker.clone(),
+      //tracker:  self.buf.tracker.clone(),
+      tracker:  &self.buf.tracker,
       _marker:  PhantomData,
     }
   }
@@ -2060,7 +2166,7 @@ impl<T> DeviceBatchIoMem<T> where T: Copy {
     self.batch_sz
   }
 
-  pub fn load(&mut self, idx: usize, src: &[T], conn: DeviceConn) {
+  pub fn load_batch(&mut self, idx: usize, src: &[T], conn: DeviceConn) {
     assert!(idx < self.batch_sz);
     self.hbufs[idx].as_mut().copy_from_slice(src);
     self.bufs[idx].as_mut().load(&self.hbufs[idx], conn);

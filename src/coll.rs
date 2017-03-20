@@ -46,26 +46,26 @@ pub struct DeviceNcclCommWorker {
 impl DeviceNcclCommWorker {
   pub fn broadcast<T>(&self, mut buf: DeviceMemRefMut<T>, root: usize, conn: DeviceConn) where T: NcclDataType + Copy {
     buf.wait(&conn);
-    /*conn.sync();
-    self.barrier.wait();*/
-    let res = unsafe { self.comm.broadcast(buf.as_mut_ptr(), buf.len(), root, conn.raw_stream().ptr) };
+    conn.sync();
+    self.barrier.wait();
+    let res = unsafe { self.comm.broadcast(buf.as_mut_ptr(), buf.len(), root, conn.raw_stream().as_ptr()) };
     assert!(res.is_ok());
     buf.post(&conn);
-    /*buf.wait(&conn);
+    buf.wait(&conn);
     conn.sync();
-    self.barrier.wait();*/
+    self.barrier.wait();
   }
 
   pub fn allreduce_sum<T>(&self, mut buf: DeviceMemRefMut<T>, conn: DeviceConn) where T: NcclDataType + Copy {
     buf.wait(&conn);
-    /*conn.sync();
-    self.barrier.wait();*/
-    let res = unsafe { self.comm.allreduce(buf.as_ptr(), buf.as_mut_ptr(), buf.len(), NcclSumOp, conn.raw_stream().ptr) };
+    conn.sync();
+    self.barrier.wait();
+    let res = unsafe { self.comm.allreduce(buf.as_ptr(), buf.as_mut_ptr(), buf.len(), NcclSumOp, conn.raw_stream().as_ptr()) };
     assert!(res.is_ok());
     buf.post(&conn);
-    /*buf.wait(&conn);
+    buf.wait(&conn);
     conn.sync();
-    self.barrier.wait();*/
+    self.barrier.wait();
   }
 }
 
