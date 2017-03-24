@@ -6,6 +6,45 @@ use sharedmem::sync::{SpinBarrier};
 //use std::cmp::{min};
 use std::sync::{Arc};
 
+pub struct GPUNcclAllreduceIo<T> where T: Copy {
+  worker:       DeviceNcclCommWorker,
+  reduce_buf:   Option<DeviceMem<T>>,
+}
+
+impl<T> GPUNcclAllreduceIo<T> where T: ZeroBits {
+  pub fn new(worker: DeviceNcclCommWorker, conn: DeviceConn) -> Self {
+    //let reduce_buf = DeviceMem::zeros(worker.buffer_size(), conn);
+    GPUNcclAllreduceIo{
+      worker:       worker,
+      //reduce_buf:   reduce_buf,
+      reduce_buf:   None,
+    }
+  }
+}
+
+impl<T> GPUNcclAllreduceIo<T> where T: ZeroBits {
+  pub fn resize(&mut self, dim: usize, conn: DeviceConn) {
+    self.reduce_buf = Some(DeviceMem::zeros(dim, conn));
+  }
+}
+
+impl<T> GPUNcclAllreduceIo<T> where T: Copy {
+  pub fn as_ref(&self) -> DeviceMemRef<T> {
+    self.reduce_buf.as_ref().unwrap().as_ref()
+  }
+
+  pub fn as_mut(&mut self) -> DeviceMemRefMut<T> {
+    self.reduce_buf.as_mut().unwrap().as_mut()
+  }
+}
+
+impl GPUNcclAllreduceIo<f32> {
+  pub fn write_allreduce_sum<'a, A>(&mut self, src_buf: A, stream: &DeviceStream) where A: FlatView<'a, DeviceArray1dView<'a, f32>> {
+    self.reduce_buf.as_mut().unwrap().as_mut().flatten_mut().copy(src_buf.flatten(), stream.conn());
+    self.worker.allreduce_sum(self.reduce_buf.as_mut().unwrap().as_mut(), stream.conn());
+  }
+}
+
 #[derive(Clone)]
 pub struct DeviceNcclCommBuilder {
   num_workers:  usize,

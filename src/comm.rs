@@ -4,41 +4,100 @@ use linalg::*;
 use cuda::runtime::*;
 use densearray::prelude::*;
 use nvsmi::*;
-//use sharedmem::sync::{SpinBarrier};
+use sharedmem::sync::{SpinBarrier};
+use stopwatch::{Stopwatch};
 
 use std::cmp::{min};
+use std::fs::{File};
+use std::io::{Write, BufWriter};
+use std::path::{PathBuf};
 use std::sync::{Arc, Barrier, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{SyncSender, Receiver, sync_channel};
 
+#[derive(Clone, Copy, Default, Debug)]
+pub struct TimingInfo {
+  pub elapsed:  f64,
+}
+
 pub struct GPUAllreduceIo<T> where T: Copy {
-  worker:       GPURingAllreduceWorker<T>,
-  reduce_buf:   DeviceMem<T>,
+  worker:       Option<GPURingAllreduceWorker<T>>,
+  reduce_buf:   Option<DeviceMem<T>>,
+  log_file:     Option<BufWriter<File>>,
+  counter:      usize,
 }
 
 impl<T> GPUAllreduceIo<T> where T: ZeroBits {
-  pub fn new(worker: GPURingAllreduceWorker<T>, conn: DeviceConn) -> Self {
+  pub fn empty(worker_rank: usize) -> Self {
+    let log_file = if worker_rank == 0 {
+      let mut log_file = File::create(&PathBuf::from("comm_trace.csv")).unwrap();
+      writeln!(&mut log_file, "iter,elapsed").unwrap();
+      Some(BufWriter::new(log_file))
+    } else {
+      None
+    };
+    GPUAllreduceIo{
+      worker:       None,
+      reduce_buf:   None,
+      log_file:     log_file,
+      counter:      0,
+    }
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.worker.is_none()
+  }
+
+  pub fn attach(&mut self, worker: GPURingAllreduceWorker<T>, conn: DeviceConn) {
     let reduce_buf = DeviceMem::zeros(worker.buffer_size(), conn);
+    self.worker = Some(worker);
+    self.reduce_buf = Some(reduce_buf);
+  }
+
+  /*pub fn new(worker: GPURingAllreduceWorker<T>, conn: DeviceConn) -> Self {
+    let reduce_buf = DeviceMem::zeros(worker.buffer_size(), conn);
+    let log_file = if worker.worker_rank == 0 {
+      let mut log_file = File::create(&PathBuf::from("comm_trace.csv")).unwrap();
+      writeln!(&mut log_file, "iter,elapsed").unwrap();
+      Some(BufWriter::new(log_file))
+    } else {
+      None
+    };
     GPUAllreduceIo{
       worker:       worker,
       reduce_buf:   reduce_buf,
+      log_file:     log_file,
+      counter:      0,
     }
-  }
+  }*/
 }
 
 impl<T> GPUAllreduceIo<T> where T: Copy {
+  pub fn buffer(&self) -> &DeviceMem<T> {
+    self.reduce_buf.as_ref().unwrap()
+  }
+
+  pub fn buffer_mut(&mut self) -> &mut DeviceMem<T> {
+    self.reduce_buf.as_mut().unwrap()
+  }
+
   pub fn as_ref(&self) -> DeviceMemRef<T> {
-    self.reduce_buf.as_ref()
+    self.reduce_buf.as_ref().unwrap().as_ref()
   }
 
   pub fn as_mut(&mut self) -> DeviceMemRefMut<T> {
-    self.reduce_buf.as_mut()
+    self.reduce_buf.as_mut().unwrap().as_mut()
   }
 }
 
 impl GPUAllreduceIo<f32> {
-  pub fn write_allreduce_sum<'a, A>(&mut self, src_buf: A, stream: &DeviceStream) where A: FlatView<'a, DeviceArray1dView<'a, f32>> {
-    self.worker.allreduce_sum(src_buf, &mut self.reduce_buf, stream);
+  pub fn write_allreduce_sum<'a, A>(&mut self, src_buf: A, stream: &DeviceStream) -> TimingInfo where A: FlatView<'a, DeviceArray1dView<'a, f32>> {
+    let timing_info = self.worker.as_mut().unwrap().allreduce_sum(src_buf, self.reduce_buf.as_mut().unwrap(), stream);
+    if let Some(ref mut log_file) = self.log_file {
+      writeln!(log_file, "{},{:.9}", self.counter, timing_info.elapsed).unwrap();
+      self.counter += 1;
+    }
+    timing_info
   }
 }
 
@@ -140,7 +199,7 @@ impl GPUAllreduceChannelConsumer<f32> {
 
 #[derive(Clone)]
 pub struct GPURingAllreduceState<T> where T: Copy {
-  barrier:  Arc<Barrier>,
+  barrier:  Arc<SpinBarrier>,
   buf_sz:   Arc<AtomicUsize>,
   parts:    Vec<Vec<Arc<Mutex<Option<(usize, DeviceMem<T>, DeviceMem<T>)>>>>>,
 }
@@ -165,7 +224,7 @@ impl<T> GPURingAllreduceBuilder<T> where T: Copy {
     GPURingAllreduceBuilder{
       num_workers:  num_workers,
       state:        GPURingAllreduceState{
-        barrier:    Arc::new(Barrier::new(num_workers)),
+        barrier:    Arc::new(SpinBarrier::new(num_workers)),
         buf_sz:     Arc::new(AtomicUsize::new(0)),
         parts:      parts,
       },
@@ -195,6 +254,7 @@ impl<T> GPURingAllreduceBuilder<T> where T: Copy + ZeroBits {
       num_workers:  self.num_workers,
       buf_sz:       buf_sz,
       state:        self.state,
+      stopwatch:    Stopwatch::new(),
       //_marker:      PhantomData,
     }
   }
@@ -204,7 +264,8 @@ pub struct GPURingAllreduceWorker<T> where T: Copy {
   worker_rank:  usize,
   num_workers:  usize,
   buf_sz:       usize,
-  state:    GPURingAllreduceState<T>,
+  state:        GPURingAllreduceState<T>,
+  stopwatch:    Stopwatch,
 }
 
 impl<T> GPURingAllreduceWorker<T> where T: Copy {
@@ -214,15 +275,25 @@ impl<T> GPURingAllreduceWorker<T> where T: Copy {
 }
 
 impl GPURingAllreduceWorker<f32> {
+  pub fn broadcast<'a, A>(&mut self, root: usize, in_buf: A, out_buf: &mut DeviceMem<f32>, stream: &DeviceStream) where A: FlatView<'a, DeviceArray1dView<'a, f32>> {
+    // TODO
+    unimplemented!();
+  }
+
   //pub fn allreduce_sum(&self, in_buf: &DeviceMem<f32>, out_buf: &mut DeviceMem<f32>, stream: &DeviceStream) {
-  pub fn allreduce_sum<'a, A>(&self, in_buf: A, out_buf: &mut DeviceMem<f32>, stream: &DeviceStream) where A: FlatView<'a, DeviceArray1dView<'a, f32>> {
+  pub fn allreduce_sum<'a, A>(&mut self, in_buf: A, out_buf: &mut DeviceMem<f32>, stream: &DeviceStream) -> TimingInfo where A: FlatView<'a, DeviceArray1dView<'a, f32>> {
     let in_arr = in_buf.flatten();
-    assert_eq!(self.buf_sz, in_arr.dim());
-    assert_eq!(self.buf_sz, out_buf.len());
+    /*assert_eq!(self.buf_sz, in_arr.dim());
+    assert_eq!(self.buf_sz, out_buf.len());*/
+    assert!(in_arr.dim() <= self.buf_sz);
+    assert!(out_buf.len() <= self.buf_sz);
+    assert!(in_arr.dim() <= out_buf.len());
+
+    let mut timing_info = TimingInfo::default();
 
     if self.num_workers == 1 {
       out_buf.as_mut().flatten_mut().copy(in_arr, stream.conn());
-      return;
+      return timing_info;
     }
 
     for p in 0 .. self.num_workers {
@@ -231,10 +302,16 @@ impl GPURingAllreduceWorker<f32> {
       let &mut (part_offset, ref mut part_buf, ref mut part_recv_buf) = &mut *part.as_mut().unwrap();
       let part_sz = part_buf.len();
       //part_buf.as_mut().copy(in_buf.as_ref().slice(part_offset, part_offset + part_sz), stream.conn());
-      part_buf.as_mut().flatten_mut().copy(in_arr.clone().view(part_offset, part_offset + part_sz), stream.conn());
+      let start_pos = min(in_arr.dim(), part_offset);
+      let end_pos = min(in_arr.dim(), part_offset + part_sz);
+      part_buf.as_mut().flatten_mut().view_mut(0, end_pos - start_pos)
+        .copy(in_arr.clone().view(start_pos, end_pos), stream.conn());
     }
-    stream.blocking_sync();
+    stream.sync();
     self.state.barrier.wait();
+
+    // TODO: start timing here.
+    self.stopwatch.lap();
 
     for p in 0 .. self.num_workers - 1 {
       let src_rank = (self.worker_rank + p + 1) % self.num_workers;
@@ -245,7 +322,7 @@ impl GPURingAllreduceWorker<f32> {
       dst_recv_buf.as_mut().copy(src_buf.as_ref(), stream.conn());
       dst_buf.as_mut().flatten_mut().add(1.0, dst_recv_buf.as_ref().flatten(), stream.conn());
     }
-    stream.blocking_sync();
+    stream.sync();
     self.state.barrier.wait();
 
     for p in 0 .. self.num_workers - 1 {
@@ -256,21 +333,29 @@ impl GPURingAllreduceWorker<f32> {
       let &mut (_, ref mut dst_buf, _) = &mut *dst_part.as_mut().unwrap();
       dst_buf.as_mut().copy(src_buf.as_ref(), stream.conn());
     }
-    stream.blocking_sync();
+    stream.sync();
     self.state.barrier.wait();
+
+    // TODO: stop timing here.
+    timing_info.elapsed = self.stopwatch.lap().elapsed();
 
     for p in 0 .. self.num_workers {
       let mut part = self.state.parts[self.worker_rank][p].lock().unwrap();
       let &(part_offset, ref part_buf, _) = &*part.as_ref().unwrap();
       let part_sz = part_buf.len();
-      out_buf.as_mut().slice_mut(part_offset, part_offset + part_sz).copy(part_buf.as_ref(), stream.conn());
+      let start_pos = min(in_arr.dim(), part_offset);
+      let end_pos = min(in_arr.dim(), part_offset + part_sz);
+      out_buf.as_mut().slice_mut(start_pos, end_pos)
+        .copy(part_buf.as_ref().slice(0, end_pos - start_pos), stream.conn());
     }
+
+    timing_info
   }
 }
 
 #[derive(Clone)]
 pub struct GPUPeerRingAllreduceState<T> where T: Copy {
-  barrier:  Arc<Barrier>,
+  barrier:  Arc<SpinBarrier>,
   buf_sz:   Arc<AtomicUsize>,
   parts:    Vec<Vec<Arc<Mutex<Option<(usize, DeviceMem<T>)>>>>>,
 }
@@ -295,7 +380,7 @@ impl<T> GPUPeerRingAllreduceBuilder<T> where T: Copy {
     GPUPeerRingAllreduceBuilder{
       num_workers:  num_workers,
       state:        GPUPeerRingAllreduceState{
-        barrier:    Arc::new(Barrier::new(num_workers)),
+        barrier:    Arc::new(SpinBarrier::new(num_workers)),
         buf_sz:     Arc::new(AtomicUsize::new(0)),
         parts:      parts,
       },
@@ -353,7 +438,7 @@ impl GPUPeerRingAllreduceWorker<f32> {
       let part_sz = part_buf.len();
       part_buf.as_mut().copy(in_buf.as_ref().slice(part_offset, part_offset + part_sz), stream.conn());
     }
-    stream.blocking_sync();
+    stream.sync();
     self.state.barrier.wait();
 
     for p in 0 .. self.num_workers - 1 {
@@ -364,7 +449,7 @@ impl GPUPeerRingAllreduceWorker<f32> {
       let &mut (_, ref mut dst_buf) = &mut *dst_part.as_mut().unwrap();
       dst_buf.as_mut().flatten_mut().add(1.0, src_buf.as_ref().flatten(), stream.conn());
     }
-    stream.blocking_sync();
+    stream.sync();
     self.state.barrier.wait();
 
     for p in 0 .. self.num_workers - 1 {
@@ -375,7 +460,7 @@ impl GPUPeerRingAllreduceWorker<f32> {
       let &mut (_, ref mut dst_buf) = &mut *dst_part.as_mut().unwrap();
       dst_buf.as_mut().copy(src_buf.as_ref(), stream.conn());
     }
-    stream.blocking_sync();
+    stream.sync();
     self.state.barrier.wait();
 
     for p in 0 .. self.num_workers {
@@ -387,12 +472,12 @@ impl GPUPeerRingAllreduceWorker<f32> {
   }
 }
 
-#[derive(Clone)]
+/*#[derive(Clone)]
 pub struct GPUTwoLevelRingAllreduceState<T> where T: Copy {
   //num_groups:   Arc<AtomicUsize>,
   gpu_topo: NvsmiTopology,
   buf_sz:   Arc<AtomicUsize>,
-  barrier:  Arc<Barrier>,
+  barrier:  Arc<SpinBarrier>,
   parts:    Vec<Vec<Arc<Mutex<Option<(usize, DeviceMem<T>, DeviceMem<T>)>>>>>,
 }
 
@@ -420,7 +505,7 @@ impl<T> GPUTwoLevelRingAllreduceBuilder<T> where T: Copy {
         //num_groups: Arc::new(AtomicUsize::new(0)),
         gpu_topo:   gpu_topo,
         buf_sz:     Arc::new(AtomicUsize::new(0)),
-        barrier:    Arc::new(Barrier::new(num_workers)),
+        barrier:    Arc::new(SpinBarrier::new(num_workers)),
         parts:      parts,
       },
     }
@@ -481,7 +566,7 @@ impl GPUTwoLevelRingAllreduceWorker<f32> {
       let part_sz = part_buf.len();
       part_buf.as_mut().copy(in_buf.as_ref().slice(part_offset, part_offset + part_sz), stream.conn());
     }
-    stream.blocking_sync();
+    stream.sync();
     self.state.barrier.wait();
 
     // Switch-level reducer.
@@ -495,7 +580,7 @@ impl GPUTwoLevelRingAllreduceWorker<f32> {
       dst_recv_buf.as_mut().copy(src_buf.as_ref(), stream.conn());
       dst_buf.as_mut().flatten_mut().add(1.0, dst_recv_buf.as_ref().flatten(), stream.conn());
     }
-    stream.blocking_sync();
+    stream.sync();
     self.state.barrier.wait();
 
     for p in 0 .. self.num_workers - 1 {
@@ -506,7 +591,7 @@ impl GPUTwoLevelRingAllreduceWorker<f32> {
       let &mut (_, ref mut dst_buf, _) = &mut *dst_part.as_mut().unwrap();
       dst_buf.as_mut().copy(src_buf.as_ref(), stream.conn());
     }
-    stream.blocking_sync();
+    stream.sync();
     self.state.barrier.wait();
 
     // TODO: Bridge-level reducer.
@@ -534,4 +619,4 @@ impl GPUTwoLevelRingAllreduceWorker<f32> {
       out_buf.as_mut().slice_mut(part_offset, part_offset + part_sz).copy(part_buf.as_ref(), stream.conn());
     }
   }
-}
+}*/

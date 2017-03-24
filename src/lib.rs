@@ -12,6 +12,7 @@ extern crate densearray;
 //extern crate nccl;
 extern crate nvsmi;
 extern crate sharedmem;
+extern crate stopwatch;
 
 extern crate libc;
 
@@ -132,8 +133,8 @@ impl DeviceStream {
       CudaDevice::set_current(dev_idx).unwrap();
       DeviceStream{
         dev_idx:  dev_idx,
-        //stream:   Arc::new(CudaStream::default()),
         dev_prop: Rc::new(dev_prop),
+        //stream:   Arc::new(CudaStream::default()),
         stream:   Arc::new(CudaStream::create().unwrap()),
         cublas:   Rc::new(RefCell::new(None)),
         cudnn:    Rc::new(RefCell::new(None)),
@@ -1113,6 +1114,14 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
 
   pub fn copy(&mut self, src: DeviceMemRef<'a, T>, conn: DeviceConn) {
     assert_eq!(self.len(), src.len());
+    if self.len() == 0 {
+      // FIXME: generally, run a no-op here for sequencing.
+      src.wait(&conn);
+      self.wait(&conn);
+      src.post(&conn);
+      self.post(&conn);
+      return;
+    }
     src.wait(&conn);
     self.wait(&conn);
     if self.dev_idx == src.dev_idx {
@@ -1373,6 +1382,14 @@ impl<'a, T> DeviceArray1dViewMut<'a, T> where T: 'a + Copy {
 
   pub fn copy(&mut self, src: DeviceArray1dView<'a, T>, conn: DeviceConn) {
     assert_eq!(self.dim(), src.dim());
+    if self.dim() == 0 {
+      // FIXME: generally, run a no-op here for sequencing.
+      src.wait(&conn);
+      self.wait(&conn);
+      src.post(&conn);
+      self.post(&conn);
+      return;
+    }
     if self.stride() == self.dim().least_stride() && self.stride() == src.stride() {
       src.wait(&conn);
       self.wait(&conn);
