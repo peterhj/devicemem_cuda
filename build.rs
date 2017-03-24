@@ -14,6 +14,7 @@ fn main() {
     .pic(true)
     .include("/usr/local/cuda/include")
     .file("kernels/cast_kernels.cu")
+    .file("kernels/reduce_kernels.cu")
     //.file("kernels/stats_kernels.cu")
     .file("kernels/vector_kernels.cu")
     .compile("libdevicemem_cuda_kernels.a");

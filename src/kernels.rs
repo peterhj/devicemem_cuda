@@ -23,4 +23,32 @@ extern "C" {
   pub fn devicemem_cuda_vector_average_f32(src: *const f32, dim: size_t, alpha: f32, dst: *mut f32, stream: cudaStream_t);
   pub fn devicemem_cuda_vector_elemwise_mult_f32(dst: *mut f32, len: size_t, xs: *const f32, stream: cudaStream_t);
   pub fn devicemem_cuda_vector_elemwise_div_f32(dst: *mut f32, len: size_t, xs: *const f32, stream: cudaStream_t);
+
+  pub fn devicemem_cuda_kernel_elem_prereduce_moments2_f32(
+      dim: size_t,
+      x: *const f32,
+      mean: *mut f32,
+      uvar: *mut f32,
+      stream: cudaStream_t);
+  pub fn devicemem_cuda_kernel_elem_increduce_moments2_f32(
+      dim: size_t,
+      count: size_t,
+      x: *const f32,
+      mean: *mut f32,
+      uvar: *mut f32,
+      stream: cudaStream_t);
+  pub fn devicemem_cuda_kernel_elem_blockreduce_moments2_f32(
+      dim: size_t,
+      src_count: size_t,
+      dst_count: size_t,
+      src_mean: *const f32,
+      src_uvar: *const f32,
+      mean: *mut f32,
+      uvar: *mut f32,
+      stream: cudaStream_t);
+  pub fn devicemem_cuda_kernel_elem_postreduce_var_f32(
+      dim: size_t,
+      count: size_t,
+      uvar: *mut f32,
+      stream: cudaStream_t);
 }
