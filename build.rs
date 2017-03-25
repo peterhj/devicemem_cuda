@@ -12,6 +12,7 @@ fn main() {
     .flag("-prec-div=true")
     .flag("-prec-sqrt=true")
     .pic(true)
+    .include("cuda_kernels")
     .include("/usr/local/cuda/include")
     .file("kernels/cast_kernels.cu")
     .file("kernels/reduce_kernels.cu")

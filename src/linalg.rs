@@ -28,6 +28,7 @@ impl<'a> DeviceMemRefMut<'a, f32> {
     assert_eq!(x.dim(), y.dim());
     let cublas = conn.cublas();
     cublas.set_pointer_mode(CublasPointerMode::Device).unwrap();
+    // FIXME: `track` has been disabled (for now?) due to unrelated changes.
     let _ = x.buf.track(&conn);
     let _ = y.buf.track(&conn);
     let _ = self.track(&conn);
@@ -41,6 +42,21 @@ impl<'a> DeviceMemRefMut<'a, f32> {
         self.as_mut_ptr(),
     ) };
     assert!(status.is_ok());
+  }
+
+  pub fn reduce_sum(&mut self, x: DeviceArray1dView<'a, f32>, conn: DeviceConn) {
+    assert_eq!(1, self.len());
+    x.wait(&conn);
+    self.wait(&conn);
+    // TODO: do a deterministic reduce.
+    unsafe { devicemem_cuda_kernel_reduce_sum_atomic_f32(
+        x.dim(),
+        x.as_ptr(),
+        self.as_mut_ptr(),
+        conn.raw_stream().as_ptr(),
+    ) };
+    x.post(&conn);
+    self.post(&conn);
   }
 }
 

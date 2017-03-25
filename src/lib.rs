@@ -269,7 +269,7 @@ pub struct DeviceMemDependencyTracker {
 
 impl Drop for DeviceMemDependencyTracker {
   fn drop(&mut self) {
-    // FIXME(20161014): should we wait for outstanding posts?
+    self.sync();
   }
 }
 
@@ -2113,7 +2113,7 @@ impl<T> DeviceIoBatch<T> where T: Copy {
 
   pub fn load(&mut self, src: &[T], conn: DeviceConn) {
     assert_eq!(self.batch_sz, src.len());
-    self.hbuf.as_mut().copy_from_slice(src);
+    self.hbuf.as_mut()[ .. self.batch_sz].copy_from_slice(src);
     self.buf.as_mut().load(&self.hbuf, conn);
   }
 
