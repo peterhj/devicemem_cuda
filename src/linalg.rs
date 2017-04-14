@@ -44,10 +44,13 @@ impl<'a> DeviceMemRefMut<'a, f32> {
     assert_eq!(x.dim(), y.dim());
     let cublas = conn.cublas();
     cublas.set_pointer_mode(CublasPointerMode::Device).unwrap();
-    // FIXME: `track` has been disabled (for now?) due to unrelated changes.
-    let _ = x.buf.track(&conn);
+    // FIXME(20170325): `track` has been disabled (for now?) due to unrelated changes.
+    /*let _ = x.buf.track(&conn);
     let _ = y.buf.track(&conn);
-    let _ = self.track(&conn);
+    let _ = self.track(&conn);*/
+    x.wait(&conn);
+    y.wait(&conn);
+    self.wait(&conn);
     let status = unsafe { cublasSdot_v2(
         cublas.ptr,
         x.dim() as _,
@@ -58,6 +61,32 @@ impl<'a> DeviceMemRefMut<'a, f32> {
         self.as_mut_ptr(),
     ) };
     assert!(status.is_ok());
+    x.post(&conn);
+    y.post(&conn);
+    self.post(&conn);
+  }
+
+  pub fn self_inner_prod(&mut self, x: DeviceArray1dView<'a, f32>, conn: DeviceConn) {
+    let cublas = conn.cublas();
+    cublas.set_pointer_mode(CublasPointerMode::Device).unwrap();
+    // FIXME(20170325): `track` has been disabled (for now?) due to unrelated changes.
+    /*let _ = x.buf.track(&conn);
+    let _ = y.buf.track(&conn);
+    let _ = self.track(&conn);*/
+    x.wait(&conn);
+    self.wait(&conn);
+    let status = unsafe { cublasSdot_v2(
+        cublas.ptr,
+        x.dim() as _,
+        x.as_ptr(),
+        x.stride() as _,
+        x.as_ptr(),
+        x.stride() as _,
+        self.as_mut_ptr(),
+    ) };
+    assert!(status.is_ok());
+    x.post(&conn);
+    self.post(&conn);
   }
 
   pub fn reduce_sum(&mut self, x: DeviceArray1dView<'a, f32>, conn: DeviceConn) {

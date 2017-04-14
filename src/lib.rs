@@ -40,6 +40,7 @@ use cuda::ffi::runtime::{cudaDeviceProp};
 use cuda_blas::{CublasHandle};
 use cuda_dnn::v5::{CudnnHandle};
 use densearray::prelude::*;
+use stopwatch::*;
 
 use std::cell::{Cell, RefCell};
 use std::marker::{PhantomData};
@@ -160,6 +161,12 @@ impl DeviceStream {
 
   pub fn sync(&self) {
     self.stream.synchronize().unwrap();
+  }
+
+  pub fn sync_debug(&self) {
+    let mut watch = Stopwatch::new();
+    self.stream.synchronize().unwrap();
+    println!("DEBUG: DeviceStream: sync_debug(): elapsed: {:.6} s", watch.lap().elapsed());
   }
 
   pub fn blocking_sync(&self) {
@@ -1827,6 +1834,19 @@ pub struct DeviceArray4dView<'a, T> where T: 'a + Copy {
   stride:   (usize, usize, usize, usize),
 }
 
+impl<'a, T> View<'a, (usize, usize, usize, usize), DeviceArray4dView<'a, T>> for DeviceArray4dView<'a, T> where T: 'a + Copy {
+  fn view(self, lo: (usize, usize, usize, usize), hi: (usize, usize, usize, usize)) -> DeviceArray4dView<'a, T> {
+    let new_dim = hi.diff(lo);
+    let new_offset = lo.offset(self.stride);
+    let new_offset_end = new_offset + new_dim.flat_len();
+    DeviceArray4dView{
+      buf:      self.buf.slice(new_offset, new_offset_end),
+      dim:      new_dim,
+      stride:   self.stride,
+    }
+  }
+}
+
 impl<'a, T> DeviceArray4dView<'a, T> where T: 'a + Copy {
   pub fn dim(&self) -> (usize, usize, usize, usize) {
     self.dim
@@ -2200,8 +2220,18 @@ impl<T> DeviceBatchIoMem<T> where T: Copy {
   }
 
   pub fn load_batch(&mut self, idx: usize, src: &[T], conn: DeviceConn) {
+    self.load_one(idx, src, conn);
+  }
+
+  pub fn load_one(&mut self, idx: usize, src: &[T], conn: DeviceConn) {
     assert!(idx < self.batch_sz);
     self.hbufs[idx].as_mut().copy_from_slice(src);
+    self.bufs[idx].as_mut().load(&self.hbufs[idx], conn);
+  }
+
+  pub fn extract_load_one(&mut self, idx: usize, src: &Extract<[T]>, conn: DeviceConn) {
+    assert!(idx < self.batch_sz);
+    src.extract(self.hbufs[idx].as_mut());
     self.bufs[idx].as_mut().load(&self.hbufs[idx], conn);
   }
 }

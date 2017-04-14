@@ -70,23 +70,6 @@ impl<T> GPUAllreduceIo<T> where T: ZeroBits {
     self.worker = Some(worker);
     self.reduce_buf = Some(reduce_buf);
   }
-
-  /*pub fn new(worker: GPURingAllreduceWorker<T>, conn: DeviceConn) -> Self {
-    let reduce_buf = DeviceMem::zeros(worker.buffer_size(), conn);
-    let log_file = if worker.worker_rank == 0 {
-      let mut log_file = File::create(&PathBuf::from("comm_trace.csv")).unwrap();
-      writeln!(&mut log_file, "iter,elapsed").unwrap();
-      Some(BufWriter::new(log_file))
-    } else {
-      None
-    };
-    GPUAllreduceIo{
-      worker:       worker,
-      reduce_buf:   reduce_buf,
-      log_file:     log_file,
-      counter:      0,
-    }
-  }*/
 }
 
 impl<T> GPUAllreduceIo<T> where T: Copy {
@@ -118,11 +101,49 @@ impl GPUAllreduceIo<f32> {
   }
 }
 
-pub struct GPUMomentsIo<T> where T: Copy {
-  worker:       Option<GPURingAllreduceWorker<T>>,
-  reduce_buf:   Option<DeviceMem<T>>,
-  /*log_file:     Option<BufWriter<File>>,
-  counter:      usize,*/
+pub struct GPUMoments2AllreduceIo<T> where T: Copy {
+  worker:   Option<GPURingMoments2AllreduceWorker<T>>,
+  mean_buf: Option<DeviceMem<T>>,
+  var_buf:  Option<DeviceMem<T>>,
+}
+
+impl<T> GPUMoments2AllreduceIo<T> where T: ZeroBits {
+  pub fn empty() -> Self {
+    GPUMoments2AllreduceIo{
+      worker:   None,
+      mean_buf: None,
+      var_buf:  None,
+    }
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.worker.is_none()
+  }
+
+  pub fn attach(&mut self, worker: GPURingMoments2AllreduceWorker<T>, stream: &DeviceStream) {
+    let mean_buf = DeviceMem::zeros(worker.buffer_size(), stream.conn());
+    let var_buf = DeviceMem::zeros(worker.buffer_size(), stream.conn());
+    self.worker = Some(worker);
+    self.mean_buf = Some(mean_buf);
+    self.var_buf = Some(var_buf);
+  }
+}
+
+impl<T> GPUMoments2AllreduceIo<T> where T: Copy {
+  pub fn mean_buffer(&self) -> &DeviceMem<T> {
+    self.mean_buf.as_ref().unwrap()
+  }
+
+  pub fn var_buffer(&self) -> &DeviceMem<T> {
+    self.var_buf.as_ref().unwrap()
+  }
+}
+
+impl GPUMoments2AllreduceIo<f32> {
+  pub fn write_allreduce_moments2<'a, A>(&mut self, src_buf: A, stream: &DeviceStream) -> TimingInfo where A: FlatView<'a, DeviceArray1dView<'a, f32>> {
+    let timing_info = self.worker.as_mut().unwrap().allreduce_moments2(src_buf, self.mean_buf.as_mut().unwrap(), self.var_buf.as_mut().unwrap(), stream);
+    timing_info
+  }
 }
 
 #[derive(Clone, Copy)]
@@ -482,8 +503,8 @@ impl GPURingMoments2AllreduceWorker<f32> {
   pub fn allreduce_moments2<'a, A>(&mut self, in_buf: A, out_mean: &mut DeviceMem<f32>, out_var: &mut DeviceMem<f32>, stream: &DeviceStream) -> TimingInfo where A: FlatView<'a, DeviceArray1dView<'a, f32>> {
     let in_arr = in_buf.flatten();
     assert!(in_arr.dim() <= self.buf_sz);
-    assert_eq!(in_arr.dim(), out_mean.len());
-    assert_eq!(in_arr.dim(), out_var.len());
+    assert!(in_arr.dim() <= out_mean.len());
+    assert!(in_arr.dim() <= out_var.len());
 
     let mut timing_info = TimingInfo::default();
 
