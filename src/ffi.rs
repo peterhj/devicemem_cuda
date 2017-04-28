@@ -72,4 +72,14 @@ extern "C" {
       count: usize,
       uvar: *mut f32,
       stream: cudaStream_t);
+
+  /*pub fn devicemem_cuda_kernel_plane_image_catmullrom_resize_f32(
+      in_pixels: *const f32,
+      in_width: usize,
+      in_height: usize,
+      channels: usize,
+      out_pixels: *mut f32,
+      out_width: usize,
+      out_height: usize,
+      stream: cudaStream_t);*/
 }

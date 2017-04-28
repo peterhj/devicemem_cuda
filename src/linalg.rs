@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 use super::*;
-use kernels::*;
+use ffi::*;
 
 use cuda::runtime::*;
 use cuda_blas::*;

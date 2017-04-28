@@ -32,7 +32,7 @@ extern crate stopwatch;
 
 extern crate libc;
 
-use kernels::*;
+use ffi::*;
 
 use async_execution::*;
 use cuda::runtime::*;
@@ -52,7 +52,7 @@ use std::sync::{Arc, Mutex, Once, ONCE_INIT};
 
 //pub mod coll;
 pub mod comm;
-pub mod kernels;
+pub mod ffi;
 pub mod linalg;
 pub mod prelude;
 //pub mod stats;
@@ -2231,7 +2231,10 @@ impl<T> DeviceBatchIoMem<T> where T: Copy {
 
   pub fn extract_load_one(&mut self, idx: usize, src: &Extract<[T]>, conn: DeviceConn) {
     assert!(idx < self.batch_sz);
-    src.extract(self.hbufs[idx].as_mut());
+    match src.extract(self.hbufs[idx].as_mut()) {
+      Err(_) => panic!("DevioceBatchIoMem: failed to extract"),
+      Ok(count) => assert_eq!(count, self.hbufs[idx].len()),
+    }
     self.bufs[idx].as_mut().load(&self.hbufs[idx], conn);
   }
 }
