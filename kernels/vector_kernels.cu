@@ -304,3 +304,45 @@ extern "C" void devicemem_cuda_vector_elemwise_div_f32(
   vector_elemwise_div_f32_kernel<<<(dim+1024-1)/1024, 1024, 0, stream>>>(
       dst, dim, xs);
 }
+
+__global__ void elem_div_f32_kernel(
+    uint32_t dim,
+    const float *divisor,
+    float *x)
+{
+  uint32_t idx = threadIdx.x + blockDim.x * blockIdx.x;
+  if (idx < dim) {
+    x[idx] = x[idx] / divisor[idx];
+  }
+}
+
+extern "C" void devicemem_cuda_kernel_elem_div_f32(
+    size_t dim,
+    const float *divisor,
+    float *x,
+    cudaStream_t stream)
+{
+  elem_div_f32_kernel<<<(dim+1024-1)/1024, 1024, 0, stream>>>(
+      dim, divisor, x);
+}
+
+__global__ void elem_ldiv_f32_kernel(
+    uint32_t dim,
+    const float *ldivisor,
+    float *x)
+{
+  uint32_t idx = threadIdx.x + blockDim.x * blockIdx.x;
+  if (idx < dim) {
+    x[idx] = ldivisor[idx] / x[idx];
+  }
+}
+
+extern "C" void devicemem_cuda_kernel_elem_ldiv_f32(
+    size_t dim,
+    const float *ldivisor,
+    float *x,
+    cudaStream_t stream)
+{
+  elem_ldiv_f32_kernel<<<(dim+1024-1)/1024, 1024, 0, stream>>>(
+      dim, ldivisor, x);
+}

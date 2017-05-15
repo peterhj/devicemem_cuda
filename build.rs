@@ -17,6 +17,7 @@ fn main() {
     .file("kernels/cast_kernels.cu")
     .file("kernels/reduce_kernels.cu")
     //.file("kernels/stats_kernels.cu")
+    .file("kernels/special.cu")
     .file("kernels/vector_kernels.cu")
     .compile("libdevicemem_cuda_kernels.a");
 

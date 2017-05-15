@@ -273,8 +273,32 @@ impl<'a> DeviceArray1dViewMut<'a, f32> {
     if self.stride == 1 {
       x.buf.wait(&conn);
       self.buf.wait(&conn);
-      unsafe { devicemem_cuda_vector_elemwise_div_f32(self.as_mut_ptr(), self.dim(), x.as_ptr(), conn.stream.ptr) };
+      /*unsafe { devicemem_cuda_vector_elemwise_div_f32(self.as_mut_ptr(), self.dim(), x.as_ptr(), conn.stream.ptr) };*/
+      unsafe { devicemem_cuda_kernel_elem_div_f32(self.dim(), x.as_ptr(), self.as_mut_ptr(), conn.raw_stream().as_ptr()) };
       x.buf.post(&conn);
+      self.buf.post(&conn);
+    } else {
+      unimplemented!();
+    }
+  }
+
+  pub fn elem_ldiv(mut self, x: DeviceArray1dView<'a, f32>, conn: DeviceConn) {
+    assert_eq!(self.dim(), x.dim());
+    if self.stride == 1 {
+      x.buf.wait(&conn);
+      self.buf.wait(&conn);
+      unsafe { devicemem_cuda_kernel_elem_ldiv_f32(self.dim(), x.as_ptr(), self.as_mut_ptr(), conn.raw_stream().as_ptr()) };
+      x.buf.post(&conn);
+      self.buf.post(&conn);
+    } else {
+      unimplemented!();
+    }
+  }
+
+  pub fn sqrt(mut self, conn: DeviceConn) {
+    if self.stride == 1 {
+      self.buf.wait(&conn);
+      unsafe { devicemem_cuda_kernel_sqrt_f32(self.dim(), self.as_mut_ptr(), conn.raw_stream().as_ptr()) };
       self.buf.post(&conn);
     } else {
       unimplemented!();

@@ -626,22 +626,7 @@ pub trait AsyncSetConstant<T> {
   fn set_constant(&mut self, c: T, conn: DeviceConn);
 }
 
-pub trait ZeroBits: Copy {
-  fn zero_bits() -> Self where Self: Sized;
-}
-
-impl ZeroBits for f32 { fn zero_bits() -> Self { 0.0 } }
-impl ZeroBits for f64 { fn zero_bits() -> Self { 0.0 } }
-impl ZeroBits for u8  { fn zero_bits() -> Self { 0 } }
-impl ZeroBits for u16 { fn zero_bits() -> Self { 0 } }
-impl ZeroBits for u32 { fn zero_bits() -> Self { 0 } }
-impl ZeroBits for u64 { fn zero_bits() -> Self { 0 } }
-impl ZeroBits for i8  { fn zero_bits() -> Self { 0 } }
-impl ZeroBits for i16 { fn zero_bits() -> Self { 0 } }
-impl ZeroBits for i32 { fn zero_bits() -> Self { 0 } }
-impl ZeroBits for i64 { fn zero_bits() -> Self { 0 } }
-
-pub struct SharedDeviceMem<T> where T: Copy {
+/*pub struct SharedDeviceMem<T> where T: Copy {
   dev_idx:  usize,
   dptr:     *mut T,
   len:      usize,
@@ -769,7 +754,7 @@ impl<'a, T> SharedDeviceMemRef<'a, T> where T: 'a + Copy {
     ) };
     src.post(&conn);
   }
-}
+}*/
 
 pub struct AsyncMem<T> where T: Copy {
   _buf:     Vec<T>,
@@ -831,6 +816,88 @@ impl<T> AsyncMem<T> where T: Copy {
     self.sync();
     &mut self._buf
   }
+}
+
+struct GPUMemImpl<T> where T: Copy {
+  dev_idx:  usize,
+  dptr:     *mut T,
+  len:      usize,
+  tracker:  RefCell<DeviceMemDependencyTracker>,
+}
+
+#[derive(Clone)]
+pub struct SharedDeviceMem<T> where T: Copy {
+  len:      usize,
+  inner:    Arc<Mutex<GPUMemImpl<T>>>,
+}
+
+impl<T> SharedDeviceMem<T> where T: ZeroBits {
+  pub fn zeros(len: usize, conn: DeviceConn) -> SharedDeviceMem<T> {
+    let mem = unsafe { SharedDeviceMem::alloc(len, conn.clone()) };
+    {
+      let mut inner_mem = mem.inner.lock().unwrap();
+      unsafe { cuda_memset_async(inner_mem.dptr as *mut u8, 0, inner_mem.len * size_of::<T>(), &*conn.raw_stream()) }.unwrap();
+      inner_mem.tracker.borrow_mut().post(&conn);
+    }
+    mem
+  }
+}
+
+impl<T> SharedDeviceMem<T> where T: Copy {
+  pub unsafe fn alloc(len: usize, conn: DeviceConn) -> SharedDeviceMem<T> {
+    let dptr = match cuda_alloc_device(len) {
+      Err(_) => panic!("DeviceMem allocation failed"),
+      Ok(dptr) => dptr,
+    };
+    let inner = GPUMemImpl{
+      dev_idx:  conn.device(),
+      dptr:     dptr,
+      len:      len,
+      tracker:  RefCell::new(DeviceMemDependencyTracker::new()),
+    };
+    SharedDeviceMem{
+      len:      len,
+      inner:    Arc::new(Mutex::new(inner)),
+    }
+  }
+
+  pub fn len(&self) -> usize {
+    self.len
+  }
+
+  pub fn size_bytes(&self) -> usize {
+    self.len * size_of::<T>()
+  }
+
+  pub fn as_ref(&self) -> SharedDeviceMemRef<T> {
+    SharedDeviceMemRef{
+      offset:   0,
+      len:      self.len,
+      inner:    self.inner.clone(),
+    }
+  }
+
+  pub fn as_mut(&self) -> SharedDeviceMemRefMut<T> {
+    SharedDeviceMemRefMut{
+      offset:   0,
+      len:      self.len,
+      inner:    self.inner.clone(),
+    }
+  }
+}
+
+#[derive(Clone)]
+pub struct SharedDeviceMemRef<T> where T: Copy {
+  offset:   usize,
+  len:      usize,
+  inner:    Arc<Mutex<GPUMemImpl<T>>>,
+}
+
+#[derive(Clone)]
+pub struct SharedDeviceMemRefMut<T> where T: Copy {
+  offset:   usize,
+  len:      usize,
+  inner:    Arc<Mutex<GPUMemImpl<T>>>,
 }
 
 pub struct DeviceMem<T> where T: Copy {
@@ -1169,7 +1236,7 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
     self.post(&conn);
   }
 
-  pub fn copy_unsync(&mut self, src: SharedDeviceMemRef<'a, T>, conn: DeviceConn) {
+  /*pub fn copy_unsync(&mut self, src: SharedDeviceMemRef<'a, T>, conn: DeviceConn) {
     assert_eq!(self.len(), src.len());
     self.wait(&conn);
     let status = unsafe { cuda_memcpy_async(
@@ -1180,7 +1247,7 @@ impl<'a, T> DeviceMemRefMut<'a, T> where T: 'a + Copy {
         &conn.raw_stream(),
     ) };
     self.post(&conn);
-  }
+  }*/
 
   pub fn load_sync(&mut self, input: &[T], conn: DeviceConn) {
     assert_eq!(self.len(), input.len());
@@ -2407,6 +2474,45 @@ impl<'a, T> AsViewMut<'a, DeviceArray4dViewMut<'a, T>> for DeviceBatchArray3d<T>
       buf:      self.buf.as_mut(),
       dim:      (self.dim.0, self.dim.1, self.dim.2, self.batch_sz),
       stride:   (self.stride.0, self.stride.1, self.stride.2, self.batch_stride),
+    }
+  }
+}
+
+#[derive(Clone)]
+pub struct SharedGPUBlockKV<T> where T: Copy {
+  blk_sz:   usize,
+  key:      usize,
+  buf:      Arc<Mutex<DeviceMem<T>>>,
+}
+
+pub struct SharedGPUBlockCache<T> where T: Copy {
+  blk_sz:   usize,
+  //blk_ct:   usize,
+  max_blks: usize,
+  hbuf:     AsyncMem<T>,
+  buf:      Arc<Mutex<DeviceMem<T>>>,
+}
+
+impl<T> SharedGPUBlockCache<T> where T: Copy {
+  pub fn new(blk_sz: usize, max_blks: usize) -> Self {
+    unimplemented!();
+  }
+
+  pub fn extract_insert(&mut self, key: usize, src: &Extract<[T]>, conn: DeviceConn) {
+    assert!(key < self.max_blks);
+    match src.extract(self.hbuf.as_mut()) {
+      Err(_) => panic!("SharedGPUBlockCache: failed to extract"),
+      Ok(count) => assert_eq!(count, self.hbuf.len()),
+    }
+    self.buf.lock().unwrap().as_mut().slice_mut(key * self.blk_sz, (key + 1) * self.blk_sz).load(&self.hbuf, conn);
+  }
+
+  pub fn get(&self, key: usize) -> SharedGPUBlockKV<T> {
+    assert!(key < self.max_blks);
+    SharedGPUBlockKV{
+      blk_sz:   self.blk_sz,
+      key:      key,
+      buf:      self.buf.clone(),
     }
   }
 }

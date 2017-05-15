@@ -40,6 +40,11 @@ extern "C" {
   pub fn devicemem_cuda_vector_elemwise_mult_f32(dst: *mut f32, len: size_t, xs: *const f32, stream: cudaStream_t);
   pub fn devicemem_cuda_vector_elemwise_div_f32(dst: *mut f32, len: size_t, xs: *const f32, stream: cudaStream_t);
 
+  pub fn devicemem_cuda_kernel_elem_div_f32(dim: usize, divisor: *const f32, x: *mut f32, stream: cudaStream_t);
+  pub fn devicemem_cuda_kernel_elem_ldiv_f32(dim: usize, ldivisor: *const f32, x: *mut f32, stream: cudaStream_t);
+
+  pub fn devicemem_cuda_kernel_sqrt_f32(dim: usize, x: *mut f32, stream: cudaStream_t);
+
   pub fn devicemem_cuda_kernel_reduce_sum_atomic_f32(
       dim: usize,
       x: *const f32,

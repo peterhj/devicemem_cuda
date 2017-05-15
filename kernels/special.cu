@@ -14,19 +14,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-pub use super::{
-  //ZeroBits,
-  AsyncSetConstant,
-  DeviceStream, DeviceConn,
-  AsyncMem,
-  DeviceMem, DeviceMemRef, DeviceMemRefMut,
-  DeviceArray1d, DeviceArray1dView, DeviceArray1dViewMut,
-  DeviceArray2d, DeviceArray2dView, DeviceArray2dViewMut,
-  DeviceArray3d,
-  DeviceArray4d, DeviceArray4dView, DeviceArray4dViewMut,
-  DeviceIoBatch,
-  DeviceBatchIoMem,
-  DeviceBatchArray1d,
-  DeviceBatchArray3d,
-};
-pub use linalg::*;
+#include "common.cuh"
+#include <cuda_runtime_api.h>
+#include <stdint.h>
+
+__global__ void sqrt_f32_kernel(
+    uint32_t dim,
+    float *x)
+{
+  uint32_t idx = threadIdx.x + blockDim.x * blockIdx.x;
+  if (idx < dim) {
+    x[idx] = sqrtf(x[idx]);
+  }
+}
+
+extern "C" void devicemem_cuda_kernel_sqrt_f32(
+    size_t dim,
+    float *x,
+    cudaStream_t stream)
+{
+  sqrt_f32_kernel<<<(dim+1024-1)/1024, 1024, 0, stream>>>(
+      dim, x);
+}
