@@ -28,5 +28,7 @@ pub use super::{
   DeviceBatchIoMem,
   DeviceBatchArray1d,
   DeviceBatchArray3d,
+  SharedGPUBlockKV,
+  SharedGPUBlockCache,
 };
 pub use linalg::*;

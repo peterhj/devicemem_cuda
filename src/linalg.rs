@@ -304,6 +304,34 @@ impl<'a> DeviceArray1dViewMut<'a, f32> {
       unimplemented!();
     }
   }
+
+  pub fn accumulate_scale_constant(&mut self, alpha: f32, x: DeviceArray1dView<'a, f32>, beta: f32, conn: DeviceConn) {
+    if self.stride == 1 {
+      x.buf.wait(&conn);
+      self.buf.wait(&conn);
+      unsafe { devicemem_cuda_kernel_accumulate_scale_constant_f32(alpha, self.dim(), x.as_ptr(), self.as_mut_ptr(), beta, conn.raw_stream().as_ptr()) };
+      x.buf.post(&conn);
+      self.buf.post(&conn);
+    } else {
+      unimplemented!();
+    }
+  }
+
+  pub fn accumulate_elem_mult(&mut self, alpha: f32, a: DeviceArray1dView<'a, f32>, x: DeviceArray1dView<'a, f32>, beta: f32, conn: DeviceConn) {
+    assert_eq!(self.dim(), a.dim());
+    assert_eq!(self.dim(), x.dim());
+    if self.stride == 1 {
+      a.buf.wait(&conn);
+      x.buf.wait(&conn);
+      self.buf.wait(&conn);
+      unsafe { devicemem_cuda_kernel_accumulate_elem_mult_f32(alpha, self.dim(), a.as_ptr(), x.as_ptr(), self.as_mut_ptr(), beta, conn.raw_stream().as_ptr()) };
+      a.buf.post(&conn);
+      x.buf.post(&conn);
+      self.buf.post(&conn);
+    } else {
+      unimplemented!();
+    }
+  }
 }
 
 impl<'a> DeviceArray2dViewMut<'a, f32> {

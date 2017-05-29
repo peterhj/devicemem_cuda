@@ -2304,6 +2304,11 @@ impl<T> DeviceBatchIoMem<T> where T: Copy {
     }
     self.bufs[idx].as_mut().load(&self.hbufs[idx], conn);
   }
+
+  pub fn copy_one<'a>(&mut self, idx: usize, src: DeviceMemRef<'a, T>, conn: DeviceConn) {
+    assert!(idx < self.batch_sz);
+    self.bufs[idx].as_mut().copy(src, conn);
+  }
 }
 
 impl<T> DeviceBatchIoMem<T> where T: ZeroBits {
@@ -2480,9 +2485,17 @@ impl<'a, T> AsViewMut<'a, DeviceArray4dViewMut<'a, T>> for DeviceBatchArray3d<T>
 
 #[derive(Clone)]
 pub struct SharedGPUBlockKV<T> where T: Copy {
-  blk_sz:   usize,
-  key:      usize,
-  buf:      Arc<Mutex<DeviceMem<T>>>,
+  pub key:      usize,
+  pub offset:   usize,
+  pub size:     usize,
+  pub buffer:   Arc<Mutex<DeviceMem<T>>>,
+}
+
+impl Extract<[u8]> for SharedGPUBlockKV<u8> {
+  fn extract(&self, dst: &mut [u8]) -> Result<usize, ()> {
+    // TODO
+    unimplemented!();
+  }
 }
 
 pub struct SharedGPUBlockCache<T> where T: Copy {
@@ -2493,11 +2506,20 @@ pub struct SharedGPUBlockCache<T> where T: Copy {
   buf:      Arc<Mutex<DeviceMem<T>>>,
 }
 
-impl<T> SharedGPUBlockCache<T> where T: Copy {
-  pub fn new(blk_sz: usize, max_blks: usize) -> Self {
-    unimplemented!();
+impl<T> SharedGPUBlockCache<T> where T: ZeroBits + Copy {
+  pub fn new(blk_sz: usize, max_blks: usize, conn: DeviceConn) -> Self {
+    let hbuf = AsyncMem::zeros(blk_sz);
+    let buf = Arc::new(Mutex::new(DeviceMem::zeros(blk_sz * max_blks, conn)));
+    SharedGPUBlockCache{
+      blk_sz:   blk_sz,
+      max_blks: max_blks,
+      hbuf:     hbuf,
+      buf:      buf,
+    }
   }
+}
 
+impl<T> SharedGPUBlockCache<T> where T: Copy {
   pub fn extract_insert(&mut self, key: usize, src: &Extract<[T]>, conn: DeviceConn) {
     assert!(key < self.max_blks);
     match src.extract(self.hbuf.as_mut()) {
@@ -2510,9 +2532,10 @@ impl<T> SharedGPUBlockCache<T> where T: Copy {
   pub fn get(&self, key: usize) -> SharedGPUBlockKV<T> {
     assert!(key < self.max_blks);
     SharedGPUBlockKV{
-      blk_sz:   self.blk_sz,
       key:      key,
-      buf:      self.buf.clone(),
+      offset:   key * self.blk_sz,
+      size:     self.blk_sz,
+      buffer:   self.buf.clone(),
     }
   }
 }

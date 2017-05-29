@@ -346,3 +346,55 @@ extern "C" void devicemem_cuda_kernel_elem_ldiv_f32(
   elem_ldiv_f32_kernel<<<(dim+1024-1)/1024, 1024, 0, stream>>>(
       dim, ldivisor, x);
 }
+
+__global__ void accumulate_scale_constant_f32_kernel(
+    float alpha,
+    uint32_t dim,
+    const float *x,
+    float *y,
+    float beta)
+{
+  uint32_t idx = threadIdx.x + blockDim.x * blockIdx.x;
+  if (idx < dim) {
+    y[idx] = alpha * x[idx] + beta * y[idx];
+  }
+}
+
+extern "C" void devicemem_cuda_kernel_accumulate_scale_constant_f32(
+    float alpha,
+    size_t dim,
+    const float *x,
+    float *y,
+    float beta,
+    cudaStream_t stream)
+{
+  accumulate_scale_constant_f32_kernel<<<(dim+1024-1)/1024, 1024, 0, stream>>>(
+      alpha, dim, x, y, beta);
+}
+
+__global__ void accumulate_elem_mult_f32_kernel(
+    float alpha,
+    uint32_t dim,
+    const float *a,
+    const float *x,
+    float *y,
+    float beta)
+{
+  uint32_t idx = threadIdx.x + blockDim.x * blockIdx.x;
+  if (idx < dim) {
+    y[idx] = alpha * a[idx] * x[idx] + beta * y[idx];
+  }
+}
+
+extern "C" void devicemem_cuda_kernel_accumulate_elem_mult_f32(
+    float alpha,
+    size_t dim,
+    const float *a,
+    const float *x,
+    float *y,
+    float beta,
+    cudaStream_t stream)
+{
+  accumulate_elem_mult_f32_kernel<<<(dim+1024-1)/1024, 1024, 0, stream>>>(
+      alpha, dim, a, x, y, beta);
+}
