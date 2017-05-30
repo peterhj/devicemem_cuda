@@ -16,6 +16,7 @@ limitations under the License.
 
 #![feature(optin_builtin_traits)]
 #![feature(arc_counts)]
+#![feature(integer_atomics)]
 #![feature(rc_counts)]
 #![feature(specialization)]
 //#![feature(zero_one)]
@@ -43,12 +44,14 @@ use densearray::prelude::*;
 use stopwatch::*;
 
 use std::cell::{Cell, RefCell};
+use std::collections::{HashMap};
 use std::marker::{PhantomData};
 use std::mem::{size_of};
 //use std::num::{Zero};
 use std::ops::{Deref, DerefMut};
 use std::rc::{Rc};
 use std::sync::{Arc, Mutex, Once, ONCE_INIT};
+use std::sync::atomic::{AtomicU64, Ordering, ATOMIC_U64_INIT};
 
 //pub mod coll;
 pub mod comm;
@@ -58,6 +61,8 @@ pub mod prelude;
 //pub mod stats;
 
 static INIT: Once = ONCE_INIT;
+
+static STREAMUID_COUNTER: AtomicU64 = ATOMIC_U64_INIT;
 
 thread_local!(static DRIVER_CONTEXT: Rc<DriverContext> = {
   INIT.call_once(|| {
@@ -101,6 +106,7 @@ impl Drop for DeviceStreamExecCtxGuard {
 
 #[derive(Clone)]
 pub struct DeviceStream {
+  uid:      u64,
   dev_idx:  usize,
   dev_prop: Rc<cudaDeviceProp>,
   stream:   Arc<CudaStream>,
@@ -140,6 +146,8 @@ impl ExecutionContext for DeviceStream {
 impl DeviceStream {
   pub fn new(dev_idx: usize) -> DeviceStream {
     DRIVER_CONTEXT.with(|driver| {
+      let uid = STREAMUID_COUNTER.fetch_add(1, Ordering::AcqRel) + 1;
+      assert!(0 != uid);
       let driver = driver.clone();
       assert!(Rc::strong_count(&driver) <= 2,
           "DriverContext does not support nesting");
@@ -149,6 +157,7 @@ impl DeviceStream {
       println!("DEBUG: cuda: device: index: {} registers per smp: {}", dev_idx, dev_prop.regs_per_multiprocessor);
       CudaDevice::set_current(dev_idx).unwrap();
       DeviceStream{
+        uid:      uid,
         dev_idx:  dev_idx,
         dev_prop: Rc::new(dev_prop),
         //stream:   Arc::new(CudaStream::default()),
@@ -898,6 +907,114 @@ pub struct SharedDeviceMemRefMut<T> where T: Copy {
   offset:   usize,
   len:      usize,
   inner:    Arc<Mutex<GPUMemImpl<T>>>,
+}
+
+pub struct DeviceRawMem<T> where T: Copy {
+  dev_idx:  usize,
+  dptr:     *mut T,
+  len:      usize,
+}
+
+unsafe impl<T> Send for DeviceRawMem<T> where T: Copy {}
+
+impl<T> DeviceRawMem<T> where T: Copy {
+  pub unsafe fn alloc(len: usize, conn: DeviceConn) -> DeviceRawMem<T> {
+    let dptr = match cuda_alloc_device(len) {
+      Err(_) => panic!("DeviceRawMem allocation failed"),
+      Ok(dptr) => dptr,
+    };
+    DeviceRawMem{
+      dev_idx:  conn.device(),
+      dptr:     dptr,
+      len:      len,
+    }
+  }
+
+  pub fn len(&self) -> usize {
+    self.len
+  }
+
+  pub fn size_bytes(&self) -> usize {
+    self.len * size_of::<T>()
+  }
+
+  pub unsafe fn as_ptr(&self) -> *const T {
+    self.dptr
+  }
+
+  pub unsafe fn as_mut_ptr(&self) -> *mut T {
+    self.dptr
+  }
+}
+
+pub struct GPUFence {
+  post_ct:  Cell<usize>,
+  epoch:    Cell<u64>,
+  fencebuf: DeviceRawMem<u64>,
+}
+
+impl GPUFence {
+  pub fn new(stream: DeviceStream) -> Self {
+    // FIXME: What is a good small allocation size?
+    // Here we assume that 32 bytes (GPU L2 cacheline) is good.
+    let mut fencebuf: DeviceRawMem<u64> = unsafe { DeviceRawMem::alloc(4, stream.conn()) };
+    unimplemented!();
+  }
+
+  pub fn post_epoch(&self, stream: DeviceStream) -> u64 {
+    self.post_ct.set(self.post_ct.get() + 1);
+    assert!(0 != self.post_ct.get());
+    let prev_epoch = self.epoch.get();
+    self.epoch.set(prev_epoch + 1);
+    assert!(0 != self.epoch.get());
+    prev_epoch
+  }
+
+  pub fn wait_epoch(&self, stream: DeviceStream) -> u64 {
+    assert!(0 != self.post_ct.get());
+    self.post_ct.set(self.post_ct.get() - 1);
+    let next_epoch = self.epoch.get();
+    assert!(0 != next_epoch);
+    next_epoch
+  }
+}
+
+pub struct GPUFenceSet {
+  streamuid_to_fence:   RefCell<HashMap<u64, Arc<GPUFence>>>,
+}
+
+impl GPUFenceSet {
+  pub fn new() -> Self {
+    // FIXME
+    unimplemented!();
+  }
+}
+
+pub fn gpu_async_fence_post_all(fencesets: &[GPUFenceSet], stream: DeviceStream) {
+  // FIXME
+  unimplemented!();
+}
+
+pub fn gpu_async_fence_wait_all(fencesets: &[GPUFenceSet], stream: DeviceStream) {
+  // FIXME
+  unimplemented!();
+}
+
+pub struct DeviceMemNew<T> where T: Copy {
+  data:     DeviceRawMem<T>,
+  fenceset: GPUFenceSet,
+}
+
+impl<T> DeviceMemNew<T> where T: ZeroBits {
+  pub fn zeros(len: usize, stream: DeviceStream) -> DeviceMemNew<T> {
+    let mut data = unsafe { DeviceRawMem::alloc(len, stream.conn()) };
+    match unsafe { cuda_memset_async(data.as_mut_ptr() as *mut u8, 0, data.size_bytes(), &*stream.conn().raw_stream()) } {
+      Err(_) => panic!("DeviceMem::zeros(): failed to memset data"),
+      Ok(_) => {}
+    }
+    // FIXME
+    unimplemented!();
+  }
 }
 
 pub struct DeviceMem<T> where T: Copy {
