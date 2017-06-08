@@ -4,7 +4,8 @@ use std::env;
 
 fn main() {
   gcc::Config::new()
-    .compiler("/usr/local/cuda/bin/nvcc")
+    //.compiler("/usr/local/cuda/bin/nvcc")
+    .compiler("/usr/local/cuda-8.0/bin/nvcc")
     .opt_level(3)
     // FIXME(20151207): for working w/ K80.
     .flag("-arch=compute_37")
